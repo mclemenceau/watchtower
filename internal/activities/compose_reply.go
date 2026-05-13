@@ -9,78 +9,39 @@ import (
 	"github.com/mclemenceau/argus/internal/buildapi"
 )
 
-const composeReplySystem = `You are a helpful Ubuntu release engineer assistant.
-Write a concise, human-friendly response (2-4 sentences) summarising the artefact situation.
-Be direct and specific — mention the image name, release, version (build date), and current status.
-Status values: APPROVED means QA-signed-off, MARKED_AS_FAILED means reviewers flagged a problem,
-UNDECIDED means awaiting human review.
-You may use Markdown: **bold** and inline code. No headers or bullet points.`
+const answerQuerySystem = `You are Argus, a helpful Ubuntu release engineer assistant monitoring image build pipelines.
+You are given a snapshot of all current Ubuntu image artefacts and a user question.
+Answer the question directly and helpfully using only the provided data.
 
-const composeListSystem = `You are a helpful Ubuntu release engineer assistant.
-Given a list of Ubuntu image artefacts and the user's query, respond with:
-1. One brief sentence summarising the overview (e.g. how many artefacts, any failures).
-2. A Markdown table with columns: | Name | Product | Release | Age | Status |
-Sort and filter the table according to the user's intent — put failures first unless specified otherwise.
-Status rendering: APPROVED → ✅ approved, MARKED_AS_FAILED → ❌ failed, UNDECIDED → ⏳ pending.
-Age is already computed and provided as a human-readable string — use it as-is.
-Use only Markdown. No HTML.`
+Response format:
+- Single artefact question: 2-4 sentences of prose. Mention name, product, release, version, age, and status.
+- List or overview question: one brief summary sentence, then a Markdown table with columns:
+  | Name | Product | Release | Age | Status |
+  Put failures first unless the user specifies otherwise.
+- Comparison or cross-cutting question: use your best judgment, tables are fine.
 
-// ComposeReply asks the LLM to write a human-readable summary and packages it into an AgentReply.
-// Pass a non-nil analysis for failure diagnosis flows; nil for simple status queries.
-func (a *Activities) ComposeReply(ctx context.Context, artefact buildapi.Artefact, analysis *LogAnalysis) (buildapi.AgentReply, error) {
-	prompt := buildComposePrompt(artefact, analysis)
+Status meanings: APPROVED = QA signed-off ✅, MARKED_AS_FAILED = flagged by reviewers ❌, UNDECIDED = awaiting review ⏳.
+Use those emoji in tables. You may use Markdown (bold, italic, inline code, tables). No HTML.
+The snapshot is refreshed automatically every ~10 minutes; mention this only if freshness is directly relevant.`
 
-	summary, err := a.LLM.Complete(ctx, composeReplySystem, prompt)
-	if err != nil {
-		return buildapi.AgentReply{}, fmt.Errorf("ComposeReply: %w", err)
-	}
-
-	reply := buildapi.AgentReply{Summary: summary}
-	if analysis != nil {
-		reply.Category    = analysis.Category
-		reply.Hypothesis  = analysis.Hypothesis
-		reply.LogExcerpts = analysis.LogExcerpts
-		reply.NextAction  = analysis.NextAction
-	} else {
-		reply.Category = categoryFromStatus(artefact.Status)
-	}
-	return reply, nil
-}
-
-// ComposeListReply asks the LLM to produce a markdown table for a list of artefacts.
-func (a *Activities) ComposeListReply(ctx context.Context, query string, artefacts []buildapi.Artefact) (buildapi.AgentReply, error) {
+// AnswerQuery sends the full artefact snapshot and the user's query to the LLM in a single call.
+func (a *Activities) AnswerQuery(ctx context.Context, query string, artefacts []buildapi.Artefact) (buildapi.AgentReply, error) {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("User query: %q\n\nArtefacts (%d):\n", query, len(artefacts)))
-	sb.WriteString("Name | Product | Release | Age | Status\n")
+	fmt.Fprintf(&sb, "User question: %q\n\nArtefact snapshot (%d artefacts, as of %s):\n\n",
+		query, len(artefacts), time.Now().UTC().Format("15:04 UTC"))
+
+	sb.WriteString("| Name | Product | Release | Version | Age | Status |\n")
+	sb.WriteString("|------|---------|---------|---------|-----|--------|\n")
 	for _, art := range artefacts {
-		sb.WriteString(fmt.Sprintf("%s | %s | %s | %s | %s\n",
-			art.Name, art.OS, art.Release, imageAge(art.Version), art.Status))
+		fmt.Fprintf(&sb, "| %s | %s | %s | %s | %s | %s |\n",
+			art.Name, art.OS, art.Release, art.Version, imageAge(art.Version), art.Status)
 	}
 
-	summary, err := a.LLM.Complete(ctx, composeListSystem, sb.String())
+	answer, err := a.LLM.Complete(ctx, answerQuerySystem, sb.String())
 	if err != nil {
-		return buildapi.AgentReply{}, fmt.Errorf("ComposeListReply: %w", err)
+		return buildapi.AgentReply{}, fmt.Errorf("AnswerQuery: %w", err)
 	}
-	return buildapi.AgentReply{Summary: summary}, nil
-}
-
-func buildComposePrompt(artefact buildapi.Artefact, analysis *LogAnalysis) string {
-	base := fmt.Sprintf(
-		"Artefact: %s\nProduct: %s\nRelease: %s\nVersion: %s\nAge: %s\nStatus: %s",
-		artefact.Name, artefact.OS, artefact.Release,
-		artefact.Version, imageAge(artefact.Version), artefact.Status,
-	)
-
-	if artefact.ImageURL != "" {
-		base += fmt.Sprintf("\nImage URL: %s", artefact.ImageURL)
-	}
-
-	if analysis != nil {
-		base += fmt.Sprintf("\n\nRoot cause analysis:\nCategory: %s\nHypothesis: %s\nNext action: %s",
-			analysis.Category, analysis.Hypothesis, analysis.NextAction)
-	}
-
-	return base
+	return buildapi.AgentReply{Summary: answer}, nil
 }
 
 // imageAge returns a human-readable age string for a YYYYMMDD or YYYYMMDD.N version field.
@@ -98,9 +59,7 @@ func imageAge(version string) string {
 	}
 	days := int(time.Since(t).Hours() / 24)
 	switch {
-	case days < 0:
-		return "today"
-	case days == 0:
+	case days <= 0:
 		return "today"
 	case days == 1:
 		return "1 day"
@@ -118,18 +77,5 @@ func imageAge(version string) string {
 			return "1 month"
 		}
 		return fmt.Sprintf("%d months", months)
-	}
-}
-
-func categoryFromStatus(status string) string {
-	switch status {
-	case "APPROVED":
-		return "approved"
-	case "MARKED_AS_FAILED":
-		return "failed"
-	case "UNDECIDED":
-		return "pending"
-	default:
-		return ""
 	}
 }
