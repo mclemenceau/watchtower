@@ -17,21 +17,19 @@
       flex-direction: column;
     }
 
-    /* ── Two-panel workspace ── */
+    /* ── Chat panel ── */
     .argus-workspace {
       display: flex;
       flex: 1;
-      min-height: 0; /* required for flex child overflow */
+      min-height: 0;
     }
 
     .argus-panel {
       display: flex;
       flex-direction: column;
       min-height: 0;
+      flex: 1;
     }
-
-    .argus-panel--feed { flex: 4; border-right: 1px solid #d9d9d9; }
-    .argus-panel--chat { flex: 6; }
 
     .argus-panel__header {
       display: flex;
@@ -77,28 +75,6 @@
     .status-dot--err  { background: #c7162b; }
     .status-dot--wait { background: #f99b11; }
 
-    /* ── Feed entries ── */
-    .feed-entry { margin-bottom: 1rem; }
-
-    .feed-entry__time {
-      font-size: 0.6875rem;
-      color: #999;
-      margin-bottom: 0.25rem;
-    }
-
-    .feed-entry__body {
-      font-family: "Ubuntu Mono", "Courier New", monospace;
-      font-size: 0.8125rem;
-      line-height: 1.5;
-      white-space: pre-wrap;
-      word-break: break-word;
-      background: #f5f5f5;
-      border-left: 3px solid #e95420;
-      padding: 0.625rem 0.875rem;
-    }
-
-    .feed-entry--change .feed-entry__body { border-left-color: #c7162b; }
-
     /* ── Chat rows ── */
     .chat-row {
       display: flex;
@@ -120,6 +96,16 @@
 
     .chat-reply { max-width: 90%; }
 
+    /* ── Sender label ── */
+    .argus-sender {
+      font-size: 0.6875rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      color: #666;
+      margin-bottom: 0.25rem;
+      text-transform: uppercase;
+    }
+
     /* ── Thinking indicator ── */
     .chat-thinking {
       display: flex;
@@ -129,6 +115,21 @@
       color: #666;
       padding: 0.5rem 0;
     }
+
+    /* ── Feed messages in chat ── */
+    .feed-msg-body {
+      font-family: "Ubuntu Mono", "Courier New", monospace;
+      font-size: 0.8125rem;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: #f5f5f5;
+      border-left: 3px solid #e95420;
+      padding: 0.625rem 0.875rem;
+      margin: 0;
+    }
+
+    .feed-msg--change .feed-msg-body { border-left-color: #c7162b; }
 
     /* ── Query form ── */
     .argus-form {
@@ -181,74 +182,113 @@
       color: #fff;
     }
 
-    /* ── Empty states ── */
-    .argus-empty {
-      height: 100%;
+    /* ── Suggestion chips ── */
+    .argus-suggestions {
       display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      text-align: center;
-      color: #999;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-top: 0.875rem;
     }
 
-    .argus-empty p { margin: 0.25rem 0; font-size: 0.875rem; }
-    .argus-empty__icon { font-size: 2rem; margin-bottom: 0.5rem; }
+    .argus-chip {
+      display: inline-block;
+      padding: 0.25rem 0.75rem;
+      font-size: 0.8125rem;
+      border: 1px solid #d9d9d9;
+      border-radius: 1rem;
+      background: #fff;
+      cursor: pointer;
+      color: #333;
+      transition: background 0.1s, border-color 0.1s;
+    }
+
+    .argus-chip:hover {
+      background: #f5f5f5;
+      border-color: #e95420;
+      color: #e95420;
+    }
+
+    /* ── Top navigation ── */
+    .argus-nav {
+      display: flex;
+      align-items: stretch;
+      background: #1d1d1d;
+      height: 3.25rem;
+      flex-shrink: 0;
+    }
+
+    .argus-nav__logo {
+      display: flex;
+      align-items: center;
+      text-decoration: none;
+    }
+
+    .argus-nav__logo-badge {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 3.25rem;
+      height: 3.25rem;
+      background: #e95420;
+      flex-shrink: 0;
+    }
+
+    .argus-nav__wordmark {
+      font-size: 1.125rem;
+      font-weight: 300;
+      color: #fff;
+      padding: 0 1.25rem 0 0.875rem;
+      letter-spacing: 0.01em;
+      white-space: nowrap;
+    }
+
+    .argus-nav__subtitle {
+      display: flex;
+      align-items: center;
+      margin-left: auto;
+      padding: 0 1.5rem;
+      font-size: 0.8125rem;
+      color: rgba(255,255,255,0.5);
+      white-space: nowrap;
+    }
   </style>
 </head>
 <body>
 
 <!-- ── Navigation ── -->
-<header class="p-navigation">
-  <div class="p-navigation__row">
-    <div class="p-navigation__banner">
-      <div class="p-navigation__tagged-logo">
-        <a href="/" class="p-navigation__link">
-          <span class="p-navigation__logo-title">ARGUS</span>
-        </a>
-      </div>
+<header class="argus-nav">
+  <a href="/" class="argus-nav__logo">
+    <div class="argus-nav__logo-badge">
+      <!-- Ubuntu Circle of Friends (simplified) -->
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="26" height="26" aria-hidden="true">
+        <g fill="white">
+          <circle cx="12" cy="4.5" r="2.2"/>
+          <path d="M9.6 6.8 C7.4 9.2 7.4 13.2 9.6 15.3 L12 12.2 L14.4 15.3 C16.6 13.2 16.6 9.2 14.4 6.8 C13.3 8.6 10.7 8.6 9.6 6.8Z"/>
+          <g transform="rotate(120,12,12)">
+            <circle cx="12" cy="4.5" r="2.2"/>
+            <path d="M9.6 6.8 C7.4 9.2 7.4 13.2 9.6 15.3 L12 12.2 L14.4 15.3 C16.6 13.2 16.6 9.2 14.4 6.8 C13.3 8.6 10.7 8.6 9.6 6.8Z"/>
+          </g>
+          <g transform="rotate(240,12,12)">
+            <circle cx="12" cy="4.5" r="2.2"/>
+            <path d="M9.6 6.8 C7.4 9.2 7.4 13.2 9.6 15.3 L12 12.2 L14.4 15.3 C16.6 13.2 16.6 9.2 14.4 6.8 C13.3 8.6 10.7 8.6 9.6 6.8Z"/>
+          </g>
+        </g>
+      </svg>
     </div>
-    <nav class="p-navigation__nav" aria-label="main navigation">
-      <ul class="p-navigation__items">
-        <li class="p-navigation__item">
-          <span class="p-navigation__link" style="font-size:0.8125rem;pointer-events:none;cursor:default;">
-            Agent Release Graduate for Ubuntu Systems
-          </span>
-        </li>
-      </ul>
-    </nav>
-  </div>
+    <span class="argus-nav__wordmark">Argus</span>
+  </a>
+  <span class="argus-nav__subtitle">Agent Release Graduate for Ubuntu Systems</span>
 </header>
 
-<!-- ── Two-panel workspace ── -->
+<!-- ── Chat workspace ── -->
 <div class="argus-workspace">
-
-  <!-- Left: Live Feed -->
-  <div class="argus-panel argus-panel--feed">
+  <div class="argus-panel">
     <div class="argus-panel__header">
-      <span class="status-dot status-dot--wait" id="feed-dot" title="Feed connection status"></span>
-      <span class="argus-panel__title">Live Feed</span>
-      <span id="feed-status" style="font-size:0.75rem;color:#999;margin-left:auto;">Connecting…</span>
-    </div>
-    <div class="argus-panel__body" id="feed-body">
-      <div class="argus-empty" id="feed-empty">
-        <div class="argus-empty__icon">📡</div>
-        <p>Waiting for pipeline updates…</p>
-      </div>
-    </div>
-  </div>
-
-  <!-- Right: Chat -->
-  <div class="argus-panel argus-panel--chat">
-    <div class="argus-panel__header">
-      <span class="argus-panel__title">Ask ARGUS</span>
+      <span class="status-dot status-dot--wait" id="feed-dot" title="Pipeline feed connection"></span>
+      <span class="argus-panel__title">ARGUS</span>
+      <span id="feed-status" style="font-size:0.75rem;color:#999;margin-left:auto;visibility:hidden;">Connecting…</span>
     </div>
     <div class="argus-panel__body" id="chat-body">
-      <div class="argus-empty" id="chat-empty">
-        <div class="argus-empty__icon">💬</div>
-        <p>Ask about any image or build failure.</p>
-        <p><em>"Why did ubuntu-server-amd64 fail?"</em></p>
-      </div>
     </div>
     <div class="argus-panel__footer">
       <div class="argus-form">
@@ -259,18 +299,14 @@
       </div>
     </div>
   </div>
-
 </div>
 
 <script>
   'use strict';
 
-  const feedBody   = document.getElementById('feed-body');
-  const feedEmpty  = document.getElementById('feed-empty');
   const feedDot    = document.getElementById('feed-dot');
   const feedStatus = document.getElementById('feed-status');
   const chatBody   = document.getElementById('chat-body');
-  const chatEmpty  = document.getElementById('chat-empty');
   const queryInput = document.getElementById('query-input');
   const sendBtn    = document.getElementById('send-btn');
 
@@ -291,10 +327,52 @@
 
   function scrollEnd(el) { el.scrollTop = el.scrollHeight; }
 
+  // ── Greeting ─────────────────────────────────────────────────────────────
+
+  const SUGGESTIONS = [
+    'What is the current status of all releases?',
+    'Are there any active failures right now?',
+    'Why did ubuntu-server-amd64 fail?',
+    'What changed in the last cycle?',
+  ];
+
+  function renderGreeting() {
+    const chips = SUGGESTIONS.map(s =>
+      `<button class="argus-chip" type="button">${esc(s)}</button>`
+    ).join('');
+
+    const el = document.createElement('div');
+    el.className = 'chat-row chat-row--agent';
+    el.innerHTML =
+      `<div class="chat-reply">` +
+        `<div class="argus-sender">Argus</div>` +
+        `<div class="p-card" style="margin:0;">` +
+          `<div style="padding:1rem;">` +
+            `<p style="margin:0 0 0.5rem;font-weight:600;">Hi! I'm Argus.</p>` +
+            `<p style="margin:0 0 0.75rem;color:#333;font-size:0.875rem;">` +
+              `I monitor Ubuntu image build pipelines across all active releases. ` +
+              `I'll post pipeline updates here as they happen, and you can ask me anything about build status or failures.` +
+            `</p>` +
+            `<p style="margin:0 0 0.25rem;font-size:0.8125rem;color:#666;">Here are a few things you can ask:</p>` +
+            `<div class="argus-suggestions">${chips}</div>` +
+          `</div>` +
+        `</div>` +
+      `</div>`;
+
+    chatBody.appendChild(el);
+
+    el.querySelectorAll('.argus-chip').forEach(btn => {
+      btn.addEventListener('click', () => {
+        queryInput.value = btn.textContent;
+        queryInput.focus();
+      });
+    });
+  }
+
   // ── SSE Feed ─────────────────────────────────────────────────────────────
 
   const FEED_STATES = {
-    ok:   ['status-dot--ok',   'Connected'],
+    ok:   ['status-dot--ok',   'Live'],
     err:  ['status-dot--err',  'Reconnecting…'],
     wait: ['status-dot--wait', 'Connecting…'],
   };
@@ -303,24 +381,26 @@
     const [cls, label] = FEED_STATES[state] || FEED_STATES.wait;
     feedDot.className      = 'status-dot ' + cls;
     feedStatus.textContent = label;
+    feedStatus.style.visibility = 'visible';
   }
 
-  function appendFeedEntry(text) {
-    feedEmpty.style.display = 'none';
+  function renderFeedMsg(text) {
     const isChange = /=== Change Report/.test(text);
     const el = document.createElement('div');
-    el.className = 'feed-entry' + (isChange ? ' feed-entry--change' : '');
+    el.className = 'chat-row chat-row--agent';
     el.innerHTML =
-      `<div class="feed-entry__time">${ts()}</div>` +
-      `<div class="feed-entry__body">${esc(text)}</div>`;
-    feedBody.appendChild(el);
-    scrollEnd(feedBody);
+      `<div class="chat-reply${isChange ? ' feed-msg--change' : ''}">` +
+        `<div class="argus-sender">Argus <span style="font-weight:400;color:#999;text-transform:none;letter-spacing:0;">${ts()}</span></div>` +
+        `<pre class="feed-msg-body">${esc(text)}</pre>` +
+      `</div>`;
+    chatBody.appendChild(el);
+    scrollEnd(chatBody);
   }
 
   (function connectSSE() {
     const es = new EventSource('/feed');
     es.addEventListener('open',    ()  => setFeedState('ok'));
-    es.addEventListener('message', (e) => { setFeedState('ok'); appendFeedEntry(e.data); });
+    es.addEventListener('message', (e) => { setFeedState('ok'); renderFeedMsg(e.data); });
     es.addEventListener('error',   ()  => {
       setFeedState('err');
       es.close();
@@ -338,10 +418,8 @@
     unknown:    '#888888',
   };
 
-  function hideEmpty() { chatEmpty.style.display = 'none'; }
-
   function appendUserMsg(text) {
-    hideEmpty();
+
     const el = document.createElement('div');
     el.className = 'chat-row chat-row--user';
     el.innerHTML = `<div class="chat-bubble--user">${esc(text)}</div>`;
@@ -350,14 +428,18 @@
   }
 
   function showThinking() {
-    hideEmpty();
+
     const el = document.createElement('div');
     el.className = 'chat-row chat-row--agent';
     el.id = 'chat-thinking';
-    el.innerHTML = `<div class="chat-thinking">
-      <span class="p-icon--spinner u-animation--spin" aria-hidden="true"></span>
-      Analysing…
-    </div>`;
+    el.innerHTML =
+      `<div class="chat-reply">` +
+        `<div class="argus-sender">Argus</div>` +
+        `<div class="chat-thinking">` +
+          `<span class="p-icon--spinner u-animation--spin" aria-hidden="true"></span>` +
+          `Analysing…` +
+        `</div>` +
+      `</div>`;
     chatBody.appendChild(el);
     scrollEnd(chatBody);
   }
@@ -384,28 +466,25 @@
          </p>`
       : '';
 
-    const wfHtml = reply.workflow_id
-      ? `<span style="font-size:0.6875rem;color:#999;font-family:monospace;margin-left:0.5rem;">${esc(reply.workflow_id)}</span>`
-      : '';
-
     const el = document.createElement('div');
     el.className = 'chat-row chat-row--agent';
-    el.innerHTML = `<div class="chat-reply">
-      <div class="p-card" style="margin:0;">
-        <div style="padding:1rem;">
-          <div style="display:flex;align-items:center;margin-bottom:0.75rem;">
-            <span class="category-badge" style="background:${color};">${esc(reply.category || 'unknown')}</span>
-            ${wfHtml}
-          </div>
-          <p style="margin:0 0 0.5rem;font-weight:600;">${esc(reply.summary)}</p>
-          ${reply.hypothesis
-            ? `<p style="margin:0 0 0.75rem;color:#333;font-size:0.875rem;">${esc(reply.hypothesis)}</p>`
-            : ''}
-          ${logHtml}
-          ${nextHtml}
-        </div>
-      </div>
-    </div>`;
+    el.innerHTML =
+      `<div class="chat-reply">` +
+        `<div class="argus-sender">Argus <span style="font-weight:400;color:#999;text-transform:none;letter-spacing:0;">${ts()}</span></div>` +
+        `<div class="p-card" style="margin:0;">` +
+          `<div style="padding:1rem;">` +
+            `<div style="display:flex;align-items:center;margin-bottom:0.75rem;">` +
+              `<span class="category-badge" style="background:${color};">${esc(reply.category || 'unknown')}</span>` +
+            `</div>` +
+            `<p style="margin:0 0 0.5rem;font-weight:600;">${esc(reply.summary)}</p>` +
+            (reply.hypothesis
+              ? `<p style="margin:0 0 0.75rem;color:#333;font-size:0.875rem;">${esc(reply.hypothesis)}</p>`
+              : '') +
+            logHtml +
+            nextHtml +
+          `</div>` +
+        `</div>` +
+      `</div>`;
     chatBody.appendChild(el);
     scrollEnd(chatBody);
   }
@@ -413,11 +492,15 @@
   function renderError(msg) {
     const el = document.createElement('div');
     el.className = 'chat-row chat-row--agent';
-    el.innerHTML = `<div class="p-notification--negative" style="max-width:90%;margin:0;">
-      <div class="p-notification__content">
-        <p class="p-notification__message">${esc(msg)}</p>
-      </div>
-    </div>`;
+    el.innerHTML =
+      `<div class="chat-reply">` +
+        `<div class="argus-sender">Argus</div>` +
+        `<div class="p-notification--negative" style="margin:0;">` +
+          `<div class="p-notification__content">` +
+            `<p class="p-notification__message">${esc(msg)}</p>` +
+          `</div>` +
+        `</div>` +
+      `</div>`;
     chatBody.appendChild(el);
     scrollEnd(chatBody);
   }
@@ -458,6 +541,8 @@
       queryInput.focus();
     }
   }
+
+  renderGreeting();
 
   sendBtn.addEventListener('click', sendQuery);
   queryInput.addEventListener('keydown', e => {
