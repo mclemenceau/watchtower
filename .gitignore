@@ -1,0 +1,4 @@
+bin/
+.env
+state/snapshot.json
+state/snapshot.json.tmp

@@ -1,0 +1,9 @@
+bin/
+.env
+state/
+.git/
+.github/
+*.md
+.golangci.yml
+Makefile
+mock/

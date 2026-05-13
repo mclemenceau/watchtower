@@ -101,10 +101,42 @@ PORT                   # Gateway HTTP port (default: 8080)
 - snapshot.json written atomically (write to tmp file, rename)
 - Never import internal packages circularly — config has no deps, llm depends only on config
 
-## Running locally (3 terminals)
-terminal 1: temporal server start-dev
-terminal 2: go run cmd/worker/main.go
-terminal 3: go run cmd/server/main.go
+## Running locally
+
+### Option A — Docker Compose (recommended)
+```
+cp .env.example .env          # fill in OPENROUTER_API_KEY
+make up                       # builds images, starts temporal + worker + server
+make down                     # tear down (state volume is preserved)
+```
+Services exposed:
+- http://localhost:8080  — Web UI + /query + /feed SSE
+- http://localhost:8233  — Temporal Web UI
+
+### Option B — 3 terminals (no Docker)
+```
+# terminal 1
+temporal server start-dev
+
+# terminal 2
+export OPENROUTER_API_KEY=...
+make run-worker   # or: go run ./cmd/worker/
+
+# terminal 3
+export OPENROUTER_API_KEY=...
+make run-server   # or: go run ./cmd/server/
+```
+
+## Makefile targets
+| Target       | What it does                                  |
+|--------------|-----------------------------------------------|
+| `make build` | Compile worker + server into `bin/`           |
+| `make clean` | Remove `bin/`                                 |
+| `make test`  | `go test -race -count=1 ./...`                |
+| `make lint`  | `golangci-lint run ./...`                     |
+| `make check` | lint + test (pre-commit gate)                 |
+| `make up`    | `docker compose up --build -d`               |
+| `make down`  | `docker compose down`                         |
 
 ## Build order (work block by block, confirm each before proceeding)
 1. go.mod + config.go + types.go — just types, no logic
@@ -132,10 +164,14 @@ Flow 2 — "Why did ubuntu-server-amd64 fail?"
 ## Development rules
 
 ### Before every commit
-ALWAYS run these two commands and fix all failures before committing:
+ALWAYS run the pre-commit gate and fix all failures before committing:
 ```
-golangci-lint run ./...
-go test -race -count=1 ./...
+make check   # runs lint then test
+```
+Or individually:
+```
+make lint    # golangci-lint run ./...
+make test    # go test -race -count=1 ./...
 ```
 Never commit code that fails either check. Install golangci-lint once:
 ```
