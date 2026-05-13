@@ -14,6 +14,7 @@ type Activities struct {
 	Builds   buildapi.BuildClient
 	Snapshot *state.Snapshot
 	LLM      llm.LLMClient
+	FeedURL  string // base URL of the HTTP server for SSE push
 }
 
 func (a *Activities) FetchBuildStatus(ctx context.Context) ([]buildapi.Image, error) {

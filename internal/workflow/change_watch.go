@@ -1,6 +1,8 @@
 package workflow
 
 import (
+	"fmt"
+	"strings"
 	"time"
 
 	sdk "go.temporal.io/sdk/workflow"
@@ -40,15 +42,31 @@ func ChangeWatchWorkflow(ctx sdk.Context) error {
 			"other_changes", len(report.OtherChanges),
 			"new_images", len(report.NewImages),
 		)
-		for _, f := range report.NewFailures {
-			sdk.GetLogger(ctx).Warn("new failure", "image", f.Image, "was", f.OldStatus)
-		}
-		for _, r := range report.Recoveries {
-			sdk.GetLogger(ctx).Info("recovery", "image", r.Image, "now", r.NewStatus)
+		msg := formatChangeReport(report)
+		if err := sdk.ExecuteActivity(ctx, act.PushToFeed, msg).Get(ctx, nil); err != nil {
+			sdk.GetLogger(ctx).Warn("PushToFeed failed", "error", err)
 		}
 	}
 
 	return nil
+}
+
+func formatChangeReport(r buildapi.ChangeReport) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("=== Change Report (%s) ===\n", time.Now().UTC().Format("15:04 UTC")))
+	for _, f := range r.NewFailures {
+		sb.WriteString(fmt.Sprintf("🔴 FAILED    %s  (was %s)\n", f.Image, f.OldStatus))
+	}
+	for _, rec := range r.Recoveries {
+		sb.WriteString(fmt.Sprintf("🟢 RECOVERED %s  (now %s)\n", rec.Image, rec.NewStatus))
+	}
+	for _, o := range r.OtherChanges {
+		sb.WriteString(fmt.Sprintf("🔵 CHANGED   %s  (%s → %s)\n", o.Image, o.OldStatus, o.NewStatus))
+	}
+	for _, n := range r.NewImages {
+		sb.WriteString(fmt.Sprintf("🆕 NEW       %s  (%s)\n", n.ID, n.Status))
+	}
+	return sb.String()
 }
 
 func hasChanges(r buildapi.ChangeReport) bool {

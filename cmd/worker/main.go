@@ -35,13 +35,14 @@ func main() {
 		Builds:   buildapi.NewMockClient(),
 		Snapshot: state.New("state/snapshot.json"),
 		LLM:      llm.NewOpenRouterClient(cfg.OpenRouterAPIKey),
+		FeedURL:  cfg.ServerURL,
 	}
 
 	w := worker.New(c, taskQueue, worker.Options{})
 
 	w.RegisterWorkflow(argusworkflow.ChangeWatchWorkflow)
+	w.RegisterWorkflow(argusworkflow.StatusTableWorkflow)
 	w.RegisterWorkflow(argusworkflow.QueryWorkflow)
-	w.RegisterWorkflow(StatusTableWorkflow)
 
 	w.RegisterActivity(act)
 
@@ -54,19 +55,30 @@ func main() {
 }
 
 func startCronWorkflows(c client.Client) {
-	_, err := c.ExecuteWorkflow(
-		context.Background(),
-		client.StartWorkflowOptions{
-			ID:           "change-watch",
-			TaskQueue:    taskQueue,
-			CronSchedule: "*/10 * * * *",
-		},
-		argusworkflow.ChangeWatchWorkflow,
-	)
-	if err != nil {
-		// Cron may already be running from a previous worker start — not fatal.
-		log.Printf("note: change-watch cron start: %v", err)
-	} else {
-		log.Println("change-watch cron scheduled (every 10 min)")
+	type cronSpec struct {
+		id       string
+		schedule string
+		wf       interface{}
+		label    string
+	}
+	crons := []cronSpec{
+		{"change-watch", "*/10 * * * *", argusworkflow.ChangeWatchWorkflow, "every 10 min"},
+		{"status-table", "0 */6 * * *", argusworkflow.StatusTableWorkflow, "every 6 h"},
+	}
+	for _, s := range crons {
+		_, err := c.ExecuteWorkflow(
+			context.Background(),
+			client.StartWorkflowOptions{
+				ID:           s.id,
+				TaskQueue:    taskQueue,
+				CronSchedule: s.schedule,
+			},
+			s.wf,
+		)
+		if err != nil {
+			log.Printf("note: %s cron start: %v", s.id, err)
+		} else {
+			log.Printf("%s cron scheduled (%s)", s.id, s.label)
+		}
 	}
 }
