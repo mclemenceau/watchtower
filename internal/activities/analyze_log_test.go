@@ -53,3 +53,25 @@ func TestAnalyzeLogInvalidJSON(t *testing.T) {
 		t.Fatal("expected error for invalid JSON, got nil")
 	}
 }
+
+func TestImageAge(t *testing.T) {
+	cases := []struct {
+		version string
+		wantErr bool // "unknown" returned
+	}{
+		{"20240101", false},
+		{"20240101.1", false},  // respin suffix
+		{"20240101.12", false}, // double-digit respin
+		{"invalid", true},
+		{"", true},
+	}
+	for _, tc := range cases {
+		got := imageAge(tc.version)
+		if tc.wantErr && got != "unknown" {
+			t.Errorf("imageAge(%q) = %q, want %q", tc.version, got, "unknown")
+		}
+		if !tc.wantErr && got == "unknown" {
+			t.Errorf("imageAge(%q) returned %q unexpectedly", tc.version, got)
+		}
+	}
+}

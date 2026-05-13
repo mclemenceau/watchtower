@@ -83,8 +83,12 @@ func buildComposePrompt(artefact buildapi.Artefact, analysis *LogAnalysis) strin
 	return base
 }
 
-// imageAge returns a human-readable age string for a YYYYMMDD version field.
+// imageAge returns a human-readable age string for a YYYYMMDD or YYYYMMDD.N version field.
 func imageAge(version string) string {
+	// Strip respin suffix (e.g. "20240513.2" → "20240513")
+	if i := strings.IndexByte(version, '.'); i != -1 {
+		version = version[:i]
+	}
 	if len(version) != 8 {
 		return "unknown"
 	}
