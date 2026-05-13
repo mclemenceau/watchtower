@@ -1,15 +1,37 @@
 services:
 
+  # ── PostgreSQL (Temporal backend) ─────────────────────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=temporal
+      - POSTGRES_PASSWORD=temporal
+      - POSTGRES_DB=temporal
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   # ── Temporal dev server ───────────────────────────────────────────────────
   temporal:
     image: temporalio/auto-setup:latest
     environment:
-      - DB=sqlite
-      - DB_PORT=0
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_SEEDS=postgres
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=temporal
+      - BIND_ON_IP=0.0.0.0
     ports:
       - "7233:7233"   # gRPC (worker + server connect here)
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "timeout 3 bash -c '</dev/tcp/127.0.0.1/7233>' 2>/dev/null"]
+      test: ["CMD-SHELL", "timeout 3 bash -c '>/dev/tcp/127.0.0.1/7233' 2>/dev/null"]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -61,3 +83,4 @@ services:
 
 volumes:
   state:
+  postgres:
