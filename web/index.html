@@ -120,11 +120,8 @@
 
     /* ── Feed messages in chat ── */
     .feed-msg-body {
-      font-family: "Ubuntu Mono", "Courier New", monospace;
-      font-size: 0.8125rem;
+      font-size: 0.875rem;
       line-height: 1.5;
-      white-space: pre-wrap;
-      word-break: break-word;
       background: #f5f5f5;
       border-left: 3px solid #e95420;
       padding: 0.625rem 0.875rem;
@@ -388,7 +385,7 @@
     el.innerHTML =
       `<div class="chat-reply${isChange ? ' feed-msg--change' : ''}">` +
         `<div class="argus-sender">Argus <span style="font-weight:400;color:#999;text-transform:none;letter-spacing:0;">${ts()}</span></div>` +
-        `<pre class="feed-msg-body">${esc(text)}</pre>` +
+        `<div class="argus-md feed-msg-body">${md(text)}</div>` +
       `</div>`;
     chatBody.appendChild(el);
     scrollEnd(chatBody);
