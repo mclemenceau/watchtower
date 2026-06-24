@@ -43,8 +43,8 @@ func ChangeWatchWorkflow(ctx sdk.Context) error {
 			"new_artefacts", len(report.NewArtefacts),
 		)
 		msg := formatChangeReport(report)
-		if err := sdk.ExecuteActivity(ctx, act.PushToFeed, msg).Get(ctx, nil); err != nil {
-			sdk.GetLogger(ctx).Warn("PushToFeed failed", "error", err)
+		if err := sdk.ExecuteActivity(ctx, act.NotifyChannel, msg).Get(ctx, nil); err != nil {
+			sdk.GetLogger(ctx).Warn("NotifyChannel failed", "error", err)
 		}
 	}
 

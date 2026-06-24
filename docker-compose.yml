@@ -26,7 +26,7 @@ services:
       - POSTGRES_PWD=temporal
       - BIND_ON_IP=0.0.0.0
     ports:
-      - "7233:7233"   # gRPC (worker + server connect here)
+      - "7233:7233"   # gRPC (bot connects here)
     depends_on:
       postgres:
         condition: service_healthy
@@ -47,39 +47,23 @@ services:
       temporal:
         condition: service_healthy
 
-  # ── Temporal worker ───────────────────────────────────────────────────────
-  worker:
+  # ── ARGUS bot (Temporal worker + Mattermost REPL) ─────────────────────────
+  bot:
     build:
       context: .
       args:
-        TARGET: worker
+        TARGET: bot
     env_file: .env
     environment:
       TEMPORAL_HOST: temporal:7233
-      SERVER_URL: http://server:8080
     volumes:
       - state:/app/state
     depends_on:
       temporal:
         condition: service_healthy
     restart: on-failure
-
-  # ── HTTP gateway + SSE feed ───────────────────────────────────────────────
-  server:
-    build:
-      context: .
-      args:
-        TARGET: server
-    env_file: .env
-    environment:
-      TEMPORAL_HOST: temporal:7233
-      PORT: "8080"
-    ports:
-      - "8080:8080"   # Web UI + /query + /feed
-    depends_on:
-      temporal:
-        condition: service_healthy
-    restart: on-failure
+    stdin_open: true   # keeps stdin open so the REPL can read input
+    tty: true          # allocate a pseudo-TTY for the interactive REPL
 
 volumes:
   state:

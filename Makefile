@@ -1,17 +1,13 @@
-.PHONY: build clean test lint check run-worker run-server up down
+.PHONY: build clean test lint check run-bot up down
 
-WORKER = bin/worker
-SERVER = bin/server
+BOT = bin/bot
 
 ## ── Local build ────────────────────────────────────────────────────────────
 
-build: $(WORKER) $(SERVER)
+build: $(BOT)
 
-$(WORKER):
-	go build -o $@ ./cmd/worker/
-
-$(SERVER):
-	go build -o $@ ./cmd/server/
+$(BOT):
+	go build -o $@ ./cmd/bot/
 
 clean:
 	rm -rf bin/
@@ -26,13 +22,10 @@ lint:
 
 check: lint test
 
-## ── Local dev (3 terminals) ────────────────────────────────────────────────
+## ── Local dev ───────────────────────────────────────────────────────────────
 
-run-worker:
-	go run ./cmd/worker/
-
-run-server:
-	go run ./cmd/server/
+run-bot:
+	go run ./cmd/bot/
 
 ## ── Docker Compose ─────────────────────────────────────────────────────────
 

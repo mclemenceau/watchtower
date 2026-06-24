@@ -5,13 +5,12 @@
 An AI-powered release monitoring agent for Ubuntu image build pipelines.
 ARGUS runs two concurrent modes:
 
-**Proactive (Temporal cron workflows — no human trigger):**
-- Every 10 min: fetch artefacts → diff against local snapshot → push change report to chat if anything changed
-- Every 6 h: fetch artefacts → format markdown status table → push to chat
+**Proactive (Temporal cron workflow — no human trigger):**
+- Every 10 min: fetch artefacts → diff against local snapshot → post change report to Mattermost if anything changed
 
-**Reactive (human-triggered via Web UI chat):**
-- Natural language Q&A against the live snapshot
-- The LLM receives the full artefact table and the question in a single call — it decides whether to answer in prose (single image) or produce a sorted markdown table (list/overview)
+**Reactive (human-triggered via Mattermost channel):**
+- Keyword-based command dispatch — no LLM required for standard queries
+- Reads from the same local snapshot maintained by the cron workflow
 
 ## Tech stack
 
@@ -19,46 +18,39 @@ ARGUS runs two concurrent modes:
 |-----------|------------|
 | Language | Go 1.21+ |
 | Workflow orchestration | Temporal (`temporalio/auto-setup`) |
-| LLM | OpenRouter API — model configurable via `LLM_MODEL` env var |
 | Pipeline data | Ubuntu Test Observer API (`https://tests-api.ubuntu.com`) |
-| Web server | Gin |
-| UI | Single `index.html` — Vanilla Framework CSS, plain JS |
+| Mattermost I/O | Incoming webhooks (real) / stdout simulation (dev) |
 | State | `state/snapshot.json` — atomic write (tmp → rename), no database |
+
+> **TODO:** Log analysis via LLM (OpenRouter) will be added back in a future block.
 
 ## Project structure
 
 ```
 cmd/
-  server/main.go          Gin HTTP gateway: POST /query, GET /feed (SSE),
-                          POST /internal/push, GET / (static UI)
-  worker/main.go          Temporal worker entrypoint; registers all workflows
-                          and activities; starts cron workflows on boot
+  bot/main.go             Single entrypoint: Temporal worker + Mattermost REPL
 internal/
   workflow/
-    change_watch.go       10-min cron: fetch → diff snapshot → push if changed
-    status_table.go       6-h cron: fetch → markdown table → push to feed
-    query.go              On-demand: load snapshot → AnswerQuery (single LLM call)
+    change_watch.go       10-min cron: fetch → diff snapshot → notify if changed
   activities/
-    build_status.go       FetchBuildStatus (GET Test Observer API → []Artefact)
-                          FormatStatusTable (markdown table with age + emoji status)
-                          LoadSnapshot / SaveSnapshot (read/write snapshot.json)
-    compose_reply.go      AnswerQuery (full snapshot + query → LLM → markdown reply)
-                          imageAge (YYYYMMDD[.N] → human-readable age string)
-    analyze_log.go        AnalyzeLog (build log → LLM → root-cause JSON)
+    build_status.go       FetchBuildStatus, LoadSnapshot, SaveSnapshot,
+                          FormatStatusTable, NotifyChannel
+    analyze_log.go        TODO stub: AnalyzeLog (LLM log root-cause analysis)
     fetch_log.go          FetchLog (GET log URL → last 200 lines)
-    push_feed.go          PushToFeed (POST /internal/push to fan out to SSE clients)
+  mattermost/
+    webhook.go            WebhookClient interface, StdoutWebhookClient, HTTPWebhookClient
+    dispatch.go           Keyword router: status, builds, releases, help
+    repl.go               RunREPL — stdin loop for terminal simulation
   buildapi/
     client.go             ArtefactClient interface + HTTPClient (Test Observer)
-    types.go              Shared data types (Artefact, ChangeReport, AgentReply, …)
+    types.go              Shared data types (Artefact, ChangeReport, ArtefactDelta)
   llm/
     openrouter.go         LLMClient interface + OpenRouterClient + MockLLMClient
+                          (kept for future log analysis; not wired in production yet)
   state/
     snapshot.go           Atomic JSON read/write; Diff logic; LatestRelease helper
   config/
-    config.go             Env var loading with defaults; fails fast if key missing
-web/
-  index.html              Single-page chat UI (dark Ubuntu nav, markdown renderer,
-                          SSE feed messages inline with chat replies)
+    config.go             Env var loading with defaults
 ```
 
 ## Core data types
@@ -91,69 +83,82 @@ type ArtefactDelta struct {
     OldStatus string `json:"old_status"`
     NewStatus string `json:"new_status"`
 }
-
-type AgentReply struct {
-    Summary     string   `json:"summary"`      // markdown; rendered in the UI
-    Category    string   `json:"category"`     // approved|failed|pending|infra|code|…
-    Hypothesis  string   `json:"hypothesis"`   // set by AnalyzeLog flow
-    LogExcerpts []string `json:"log_excerpts"` // set by AnalyzeLog flow
-    NextAction  string   `json:"next_action"`  // set by AnalyzeLog flow
-    WorkflowID  string   `json:"workflow_id"`
-}
 ```
 
-## Workflow data flows
+## Workflow data flow
 
 ### ChangeWatchWorkflow (every 10 min)
 ```
 FetchBuildStatus → LoadSnapshot → Diff → SaveSnapshot
-                                       └─ if changes → PushToFeed (markdown change report)
+                                       └─ if changes → NotifyChannel (markdown change report)
 ```
 
-### StatusTableWorkflow (every 6 h)
+## Mattermost interaction model
+
+### Reactive (user-triggered)
+
+| Command | Response |
+|---------|----------|
+| `status` | Status table for the latest (or pinned) release |
+| `builds <release>` | All builds for a specific release |
+| `releases` | List of all known releases with artefact counts |
+| `help` | Available commands |
+| *(anything else)* | "I didn't understand…" + pointer to help |
+
+### Proactive (automatic)
+
+Change reports are posted to the channel whenever the 10-min cron detects:
+- New failures (`MARKED_AS_FAILED`)
+- Recoveries (`APPROVED` after failure)
+- Status changes
+- New artefacts
+
+Format: emoji-prefixed lines (`🔴 FAILED`, `🟢 APPROVED`, `🔵 CHANGED`, `🆕 NEW`).
+
+## Terminal simulation (development)
+
+Run `make run-bot` (no Mattermost credentials needed):
+
 ```
-FetchBuildStatus → FormatStatusTable → PushToFeed (markdown table)
+$ make run-bot
+[ARGUS] Bot started. Type a message (Ctrl-D to quit):
+you> help
+[ARGUS →]
+**ARGUS — available commands:** ...
+
+you> status
+[ARGUS →]
+**Build Status — plucky** · 2026-06-24 14:00 UTC
+...
+
+you> builds noble
+[ARGUS →]
+**Builds for noble** (2 artefacts) ...
 ```
 
-### QueryWorkflow (on demand)
-```
-LoadSnapshot ──► (empty? → FetchBuildStatus) ──► AnswerQuery (LLM) → AgentReply
-```
-The snapshot is the single source of truth for queries. `AnswerQuery` sends
-the full artefact table to the LLM in one call; the model decides how to answer
-based on the question (prose for a single image, sorted table for an overview,
-free-form for cross-cutting queries).
+Proactive change reports from the cron workflow print inline with the same
+`[ARGUS →]` prefix.
 
-## Web UI
-
-Single-page chat (`web/index.html`) with no build step or external JS dependencies.
-
-- **Nav**: ubuntu.com/desktop style — dark charcoal bar, orange Ubuntu CoF badge, "Argus" wordmark
-- **Chat panel**: full-width, SSE feed messages and query replies share the same thread
-- **Markdown renderer**: inline `md()` function handles tables, bold, italic, inline code
-- **SSE reconnect**: automatic 3-second retry on connection loss; status dot in header
-- **Greeting**: rendered immediately on load before any SSE connection
-
-Feed messages (from `PushToFeed`) and query replies (from `POST /query`) both
-render through the same `md()` pipeline, so status tables, change reports, and
-LLM answers all use consistent formatting.
+When `MATTERMOST_WEBHOOK_URL` is set, `StdoutWebhookClient` is replaced by
+`HTTPWebhookClient` with no other code changes.
 
 ## Key design decisions
 
-**Snapshot as query source** — `QueryWorkflow` reads the local snapshot rather
-than hitting the Test Observer API on every query. This eliminates a redundant
-API call per query, keeps latency low, and gives the LLM consistent data that
-matches what the change-watch cycle is monitoring.
+**Snapshot as query source** — the REPL dispatcher reads `state/snapshot.json`
+(maintained by `ChangeWatchWorkflow`) rather than hitting the API on every
+command. This keeps latency low and ensures commands are consistent with what
+the cron is monitoring.
 
-**Single LLM call per query** — the full artefact table + question go to the
-model in one shot. This is simpler, faster, and more capable than the previous
-multi-step intent-detection approach (FuzzyMatch → branch → ComposeReply /
-ComposeListReply), which struggled with cross-cutting questions and list queries.
+**Keyword dispatch, not LLM** — all standard commands are handled
+deterministically. This makes responses instant, reproducible, and free of
+API cost. An LLM is reserved for log analysis (TODO).
+
+**Single binary** — `cmd/bot` embeds both the Temporal worker and the REPL
+loop. No separate server process is needed.
 
 **No database** — `state/snapshot.json` written atomically (write to `.tmp`,
-rename) is sufficient for the monitoring use case and avoids infrastructure
-complexity.
+rename) is sufficient for the monitoring use case.
 
-**Interface-driven testing** — `ArtefactClient` and `LLMClient` are interfaces
-with mock implementations, allowing unit tests for all LLM-driven activities
-without real API calls.
+**Interface-driven testing** — `ArtefactClient`, `LLMClient`, and
+`WebhookClient` are all interfaces with mock/stub implementations, enabling
+unit tests without real API calls.

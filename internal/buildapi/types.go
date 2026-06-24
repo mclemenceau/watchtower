@@ -28,12 +28,3 @@ type ArtefactDelta struct {
 	OldStatus string `json:"old_status"`
 	NewStatus string `json:"new_status"`
 }
-
-type AgentReply struct {
-	Summary     string   `json:"summary"`
-	Category    string   `json:"category"` // infra|code|dependency|flaky|unknown
-	Hypothesis  string   `json:"hypothesis"`
-	LogExcerpts []string `json:"log_excerpts"`
-	NextAction  string   `json:"next_action"`
-	WorkflowID  string   `json:"workflow_id"`
-}

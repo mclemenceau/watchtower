@@ -8,6 +8,7 @@ import (
 
 	"github.com/mclemenceau/argus/internal/buildapi"
 	"github.com/mclemenceau/argus/internal/llm"
+	"github.com/mclemenceau/argus/internal/mattermost"
 	"github.com/mclemenceau/argus/internal/state"
 )
 
@@ -15,9 +16,10 @@ import (
 type Activities struct {
 	Artefacts      buildapi.ArtefactClient
 	Snapshot       *state.Snapshot
-	LLM            llm.LLMClient
-	FeedURL        string // base URL of the HTTP server for SSE push
+	Hook           mattermost.WebhookClient
 	DefaultRelease string // pin status table to this release; empty = auto-detect
+	// TODO: wire LLM when log analysis is implemented
+	LLM llm.LLMClient
 }
 
 func (a *Activities) FetchBuildStatus(ctx context.Context) ([]buildapi.Artefact, error) {
@@ -70,6 +72,14 @@ func (a *Activities) FormatStatusTable(_ context.Context, artefacts []buildapi.A
 	return sb.String(), nil
 }
 
+// NotifyChannel sends a message to the Mattermost channel (or stdout in simulation mode).
+func (a *Activities) NotifyChannel(_ context.Context, text string) error {
+	if err := a.Hook.Send(text); err != nil {
+		return fmt.Errorf("NotifyChannel: %w", err)
+	}
+	return nil
+}
+
 func statusEmoji(status string) string {
 	switch status {
 	case "APPROVED":
@@ -78,5 +88,41 @@ func statusEmoji(status string) string {
 		return "❌ failed"
 	default:
 		return "⏳ pending"
+	}
+}
+
+// imageAge returns a human-readable age string for a YYYYMMDD or YYYYMMDD.N version field.
+func imageAge(version string) string {
+	// Strip respin suffix (e.g. "20240513.2" → "20240513")
+	if i := strings.IndexByte(version, '.'); i != -1 {
+		version = version[:i]
+	}
+	if len(version) != 8 {
+		return "unknown"
+	}
+	t, err := time.Parse("20060102", version)
+	if err != nil {
+		return "unknown"
+	}
+	days := int(time.Since(t).Hours() / 24)
+	switch {
+	case days <= 0:
+		return "today"
+	case days == 1:
+		return "1 day"
+	case days < 14:
+		return fmt.Sprintf("%d days", days)
+	case days < 60:
+		weeks := days / 7
+		if weeks == 1 {
+			return "1 week"
+		}
+		return fmt.Sprintf("%d weeks", weeks)
+	default:
+		months := days / 30
+		if months == 1 {
+			return "1 month"
+		}
+		return fmt.Sprintf("%d months", months)
 	}
 }
