@@ -3,6 +3,7 @@ package mattermost
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mclemenceau/argus/internal/buildapi"
 )
@@ -18,25 +19,30 @@ func (c *captureHook) Send(text string) error {
 	return c.err
 }
 
+var (
+	today     = time.Now().UTC().Format("20060102")
+	yesterday = time.Now().UTC().AddDate(0, 0, -1).Format("20060102")
+)
+
 var testArtefacts = []buildapi.Artefact{
-	{ID: 1, Name: "ubuntu-desktop-amd64", OS: "ubuntu", Release: "noble", Version: "20260601", Status: "APPROVED"},
-	{ID: 2, Name: "ubuntu-server-amd64", OS: "ubuntu-server", Release: "noble", Version: "20260601", Status: "MARKED_AS_FAILED"},
-	{ID: 3, Name: "ubuntu-desktop-amd64", OS: "ubuntu", Release: "plucky", Version: "20260610", Status: "UNDECIDED"},
+	// noble: 1 built today, 1 not built (yesterday)
+	{ID: 1, Name: "ubuntu-desktop-amd64", OS: "ubuntu", Release: "noble", Version: today},
+	{ID: 2, Name: "ubuntu-server-amd64", OS: "ubuntu-server", Release: "noble", Version: yesterday},
+	// plucky: 1 built today
+	{ID: 3, Name: "ubuntu-desktop-amd64", OS: "ubuntu", Release: "plucky", Version: today},
 }
+
+// --- help ---
 
 func TestDispatchHelp(t *testing.T) {
 	hook := &captureHook{}
 	if err := Dispatch("help", testArtefacts, "", hook); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(hook.last, "status") {
-		t.Errorf("help output missing 'status' command, got:\n%s", hook.last)
-	}
-	if !strings.Contains(hook.last, "builds") {
-		t.Errorf("help output missing 'builds' command, got:\n%s", hook.last)
-	}
-	if !strings.Contains(hook.last, "releases") {
-		t.Errorf("help output missing 'releases' command, got:\n%s", hook.last)
+	for _, want := range []string{"builds status", "builds status <release>", "help"} {
+		if !strings.Contains(hook.last, want) {
+			t.Errorf("help output missing %q, got:\n%s", want, hook.last)
+		}
 	}
 }
 
@@ -45,42 +51,47 @@ func TestDispatchHelpCaseInsensitive(t *testing.T) {
 	if err := Dispatch("HELP", testArtefacts, "", hook); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(hook.last, "status") {
-		t.Errorf("help output missing 'status' command")
+	if !strings.Contains(hook.last, "builds status") {
+		t.Errorf("help output missing 'builds status' command")
 	}
 }
 
-func TestDispatchStatus(t *testing.T) {
+// --- builds status (summary) ---
+
+func TestDispatchBuildsStatus(t *testing.T) {
 	hook := &captureHook{}
-	// defaultRelease="" → auto-detects plucky (latest version)
-	if err := Dispatch("status", testArtefacts, "", hook); err != nil {
+	if err := Dispatch("builds status", testArtefacts, "", hook); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(hook.last, "plucky") {
-		t.Errorf("status output should contain 'plucky', got:\n%s", hook.last)
+	// Both releases must appear.
+	if !strings.Contains(hook.last, "noble") {
+		t.Errorf("builds status missing 'noble', got:\n%s", hook.last)
 	}
-	if !strings.Contains(hook.last, "Build Status") {
-		t.Errorf("status output missing 'Build Status' header, got:\n%s", hook.last)
+	if !strings.Contains(hook.last, "plucky") {
+		t.Errorf("builds status missing 'plucky', got:\n%s", hook.last)
+	}
+	// Must contain progress bar squares.
+	if !strings.Contains(hook.last, "🟩") {
+		t.Errorf("builds status missing green squares, got:\n%s", hook.last)
+	}
+	if !strings.Contains(hook.last, "🟥") {
+		t.Errorf("builds status missing red squares, got:\n%s", hook.last)
 	}
 }
 
-func TestDispatchStatusPinnedRelease(t *testing.T) {
+func TestDispatchBuildsStatusCaseInsensitive(t *testing.T) {
 	hook := &captureHook{}
-	if err := Dispatch("status", testArtefacts, "noble", hook); err != nil {
+	if err := Dispatch("Builds Status", testArtefacts, "", hook); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "noble") {
-		t.Errorf("status should show noble when pinned, got:\n%s", hook.last)
-	}
-	// Should not show plucky artefacts when pinned to noble.
-	if strings.Contains(hook.last, "ubuntu-desktop-amd64") && strings.Contains(hook.last, "plucky") {
-		t.Errorf("status should not show plucky artefacts when pinned to noble")
+		t.Errorf("builds status case-insensitive failed, got:\n%s", hook.last)
 	}
 }
 
-func TestDispatchStatusEmptySnapshot(t *testing.T) {
+func TestDispatchBuildsStatusEmptySnapshot(t *testing.T) {
 	hook := &captureHook{}
-	if err := Dispatch("status", nil, "", hook); err != nil {
+	if err := Dispatch("builds status", nil, "", hook); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "No snapshot") {
@@ -88,47 +99,58 @@ func TestDispatchStatusEmptySnapshot(t *testing.T) {
 	}
 }
 
-func TestDispatchBuilds(t *testing.T) {
+// --- builds status <release> (detail) ---
+
+func TestDispatchBuildsStatusRelease(t *testing.T) {
 	hook := &captureHook{}
-	if err := Dispatch("builds noble", testArtefacts, "", hook); err != nil {
+	if err := Dispatch("builds status noble", testArtefacts, "", hook); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "noble") {
-		t.Errorf("builds output missing 'noble', got:\n%s", hook.last)
+		t.Errorf("builds status noble missing 'noble', got:\n%s", hook.last)
 	}
 	if !strings.Contains(hook.last, "ubuntu-desktop-amd64") {
-		t.Errorf("builds output missing artefact name, got:\n%s", hook.last)
+		t.Errorf("builds status noble missing artefact name, got:\n%s", hook.last)
 	}
 	if !strings.Contains(hook.last, "ubuntu-server-amd64") {
-		t.Errorf("builds output missing second artefact, got:\n%s", hook.last)
+		t.Errorf("builds status noble missing second artefact, got:\n%s", hook.last)
 	}
-	// plucky artefact must NOT appear in noble builds
+	// Must show build status indicators.
+	if !strings.Contains(hook.last, "✅") {
+		t.Errorf("builds status noble missing ✅, got:\n%s", hook.last)
+	}
+	if !strings.Contains(hook.last, "❌") {
+		t.Errorf("builds status noble missing ❌, got:\n%s", hook.last)
+	}
+	// plucky artefact must NOT appear.
 	if strings.Contains(hook.last, "plucky") {
-		t.Errorf("builds noble should not contain plucky artefact")
+		t.Errorf("builds status noble should not contain plucky artefact")
 	}
 }
 
-func TestDispatchBuildsCaseInsensitive(t *testing.T) {
+func TestDispatchBuildsStatusReleaseCaseInsensitive(t *testing.T) {
 	hook := &captureHook{}
-	if err := Dispatch("builds Noble", testArtefacts, "", hook); err != nil {
+	if err := Dispatch("builds status Noble", testArtefacts, "", hook); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "ubuntu-desktop-amd64") {
-		t.Errorf("builds Noble should return noble artefacts, got:\n%s", hook.last)
+		t.Errorf("builds status Noble should return noble artefacts, got:\n%s", hook.last)
 	}
 }
 
-func TestDispatchBuildsUnknownRelease(t *testing.T) {
+func TestDispatchBuildsStatusReleaseUnknown(t *testing.T) {
 	hook := &captureHook{}
-	if err := Dispatch("builds nonexistent", testArtefacts, "", hook); err != nil {
+	if err := Dispatch("builds status nonexistent", testArtefacts, "", hook); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(hook.last, "No builds found") {
-		t.Errorf("expected 'No builds found' message, got: %s", hook.last)
+	if !strings.Contains(hook.last, "No artefacts found") {
+		t.Errorf("expected 'No artefacts found' message, got: %s", hook.last)
 	}
 }
 
-func TestDispatchBuildsNoRelease(t *testing.T) {
+// --- builds (no args or unknown sub-command) ---
+
+func TestDispatchBuildsNoArgs(t *testing.T) {
 	hook := &captureHook{}
 	if err := Dispatch("builds", testArtefacts, "", hook); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -138,18 +160,17 @@ func TestDispatchBuildsNoRelease(t *testing.T) {
 	}
 }
 
-func TestDispatchReleases(t *testing.T) {
+func TestDispatchBuildsUnknownSubcommand(t *testing.T) {
 	hook := &captureHook{}
-	if err := Dispatch("releases", testArtefacts, "", hook); err != nil {
+	if err := Dispatch("builds noble", testArtefacts, "", hook); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(hook.last, "noble") {
-		t.Errorf("releases output missing 'noble', got:\n%s", hook.last)
-	}
-	if !strings.Contains(hook.last, "plucky") {
-		t.Errorf("releases output missing 'plucky', got:\n%s", hook.last)
+	if !strings.Contains(hook.last, "Usage") {
+		t.Errorf("expected usage message for unknown sub-command, got: %s", hook.last)
 	}
 }
+
+// --- unknown / empty ---
 
 func TestDispatchUnknown(t *testing.T) {
 	hook := &captureHook{}
@@ -175,6 +196,8 @@ func TestDispatchEmpty(t *testing.T) {
 	}
 }
 
+// --- imageAge ---
+
 func TestImageAge(t *testing.T) {
 	cases := []struct {
 		version string
@@ -194,5 +217,48 @@ func TestImageAge(t *testing.T) {
 		if !tc.wantErr && got == "unknown" {
 			t.Errorf("imageAge(%q) returned %q unexpectedly", tc.version, got)
 		}
+	}
+}
+
+// --- progress bar ---
+
+func TestBuildsStatusProgressBar(t *testing.T) {
+	// 5 artefacts: 5 built today → 100% → 10 green squares, 0 red.
+	artefacts := []buildapi.Artefact{
+		{ID: 1, Release: "noble", Version: today},
+		{ID: 2, Release: "noble", Version: today},
+		{ID: 3, Release: "noble", Version: today},
+		{ID: 4, Release: "noble", Version: today},
+		{ID: 5, Release: "noble", Version: today},
+	}
+	hook := &captureHook{}
+	if err := Dispatch("builds status", artefacts, "", hook); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	wantBar := strings.Repeat("🟩", 10)
+	if !strings.Contains(hook.last, wantBar) {
+		t.Errorf("100%% bar should be 10 green squares, got:\n%s", hook.last)
+	}
+	if strings.Contains(hook.last, "🟥") {
+		t.Errorf("100%% bar should have no red squares, got:\n%s", hook.last)
+	}
+}
+
+func TestBuildsStatusProgressBarZero(t *testing.T) {
+	// 2 artefacts: none built today → 0% → 0 green, 10 red.
+	artefacts := []buildapi.Artefact{
+		{ID: 1, Release: "noble", Version: yesterday},
+		{ID: 2, Release: "noble", Version: yesterday},
+	}
+	hook := &captureHook{}
+	if err := Dispatch("builds status", artefacts, "", hook); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	wantBar := strings.Repeat("🟥", 10)
+	if !strings.Contains(hook.last, wantBar) {
+		t.Errorf("0%% bar should be 10 red squares, got:\n%s", hook.last)
+	}
+	if strings.Contains(hook.last, "🟩") {
+		t.Errorf("0%% bar should have no green squares, got:\n%s", hook.last)
 	}
 }

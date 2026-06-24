@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/mclemenceau/argus/internal/buildapi"
-	"github.com/mclemenceau/argus/internal/state"
 )
 
 // Dispatch routes an incoming message to the appropriate handler and sends the
@@ -19,65 +18,77 @@ func Dispatch(msg string, artefacts []buildapi.Artefact, defaultRelease string, 
 	}
 
 	lower := strings.ToLower(msg)
+	parts := strings.Fields(msg)
 
 	switch {
 	case lower == "help":
 		return hook.Send(helpText())
 
-	case lower == "status":
-		return handleStatus(artefacts, defaultRelease, hook)
+	case lower == "builds status":
+		return handleBuildsStatus(artefacts, hook)
 
-	case strings.HasPrefix(lower, "builds"):
-		parts := strings.Fields(msg)
-		if len(parts) < 2 {
-			return hook.Send("Usage: `builds <release>` — e.g. `builds noble`")
-		}
-		return handleBuilds(artefacts, parts[1], hook)
+	case strings.HasPrefix(lower, "builds status ") && len(parts) == 3:
+		return handleBuildsStatusRelease(artefacts, parts[2], hook)
 
-	case lower == "releases":
-		return handleReleases(artefacts, hook)
+	case lower == "builds" || (strings.HasPrefix(lower, "builds") && len(parts) == 2):
+		return hook.Send("Usage: `builds status` · `builds status <release>`")
 
 	default:
 		return hook.Send(fmt.Sprintf("I didn't understand `%s`. Type `help` for available commands.", msg))
 	}
 }
 
-// handleStatus renders the full status table for the current/default release.
-func handleStatus(artefacts []buildapi.Artefact, defaultRelease string, hook WebhookClient) error {
+// handleBuildsStatus renders a summary table: one row per release with built/total counts
+// and a 10-square progress bar (🟩 per 10% built, 🟥 for the rest).
+func handleBuildsStatus(artefacts []buildapi.Artefact, hook WebhookClient) error {
 	if len(artefacts) == 0 {
 		return hook.Send("No snapshot available yet — the first fetch is still in progress.")
 	}
 
-	release := defaultRelease
-	if release == "" {
-		release = state.LatestRelease(artefacts)
+	type releaseStat struct {
+		total int
+		built int
 	}
-
-	var filtered []buildapi.Artefact
+	stats := make(map[string]*releaseStat)
 	for _, art := range artefacts {
-		if art.Release == release {
-			filtered = append(filtered, art)
+		s, ok := stats[art.Release]
+		if !ok {
+			s = &releaseStat{}
+			stats[art.Release] = s
+		}
+		s.total++
+		if isBuiltToday(art.Version) {
+			s.built++
 		}
 	}
 
-	if len(filtered) == 0 {
-		return hook.Send(fmt.Sprintf("No artefacts found for release **%s**.", release))
+	releases := make([]string, 0, len(stats))
+	for r := range stats {
+		releases = append(releases, r)
 	}
+	sort.Strings(releases)
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "**Build Status — %s** · %s\n\n",
-		release, time.Now().UTC().Format("2006-01-02 15:04 UTC"))
-	sb.WriteString("| Name | Product | Release | Age | Status |\n")
-	sb.WriteString("|------|---------|---------|-----|--------|\n")
-	for _, art := range filtered {
-		fmt.Fprintf(&sb, "| %s | %s | %s | %s | %s |\n",
-			art.Name, art.OS, art.Release, imageAge(art.Version), buildStatus(art.Version))
+	fmt.Fprintf(&sb, "**Build Status** · %s\n\n", time.Now().UTC().Format("2006-01-02 15:04 UTC"))
+	sb.WriteString("| Release | Built | Total | Progress |\n")
+	sb.WriteString("|---------|-------|-------|----------|\n")
+	for _, r := range releases {
+		s := stats[r]
+		pct := 0
+		if s.total > 0 {
+			pct = s.built * 100 / s.total
+		}
+		green := pct / 10
+		red := 10 - green
+		bar := strings.Repeat("🟩", green) + strings.Repeat("🟥", red)
+		fmt.Fprintf(&sb, "| **%s** | %d | %d | %s |\n", r, s.built, s.total, bar)
 	}
 	return hook.Send(sb.String())
 }
 
-// handleBuilds lists all builds for a specific release.
-func handleBuilds(artefacts []buildapi.Artefact, release string, hook WebhookClient) error {
+// handleBuildsStatusRelease renders a detail table for a single release:
+// one row per artefact with name, version, age and build status.
+func handleBuildsStatusRelease(artefacts []buildapi.Artefact, release string, hook WebhookClient) error {
 	if len(artefacts) == 0 {
 		return hook.Send("No snapshot available yet — the first fetch is still in progress.")
 	}
@@ -90,42 +101,17 @@ func handleBuilds(artefacts []buildapi.Artefact, release string, hook WebhookCli
 	}
 
 	if len(filtered) == 0 {
-		return hook.Send(fmt.Sprintf("No builds found for release **%s**.", release))
+		return hook.Send(fmt.Sprintf("No artefacts found for release **%s**.", release))
 	}
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "**Builds for %s** (%d artefacts)\n\n", release, len(filtered))
-	sb.WriteString("| Name | Product | Version | Age | Status |\n")
-	sb.WriteString("|------|---------|---------|-----|--------|\n")
+	fmt.Fprintf(&sb, "**Build Status — %s** · %s\n\n",
+		release, time.Now().UTC().Format("2006-01-02 15:04 UTC"))
+	sb.WriteString("| Artefact | Product | Version | Age | Build |\n")
+	sb.WriteString("|----------|---------|---------|-----|-------|\n")
 	for _, art := range filtered {
 		fmt.Fprintf(&sb, "| %s | %s | %s | %s | %s |\n",
 			art.Name, art.OS, art.Version, imageAge(art.Version), buildStatus(art.Version))
-	}
-	return hook.Send(sb.String())
-}
-
-// handleReleases lists all known releases in the current snapshot.
-func handleReleases(artefacts []buildapi.Artefact, hook WebhookClient) error {
-	if len(artefacts) == 0 {
-		return hook.Send("No snapshot available yet — the first fetch is still in progress.")
-	}
-
-	counts := make(map[string]int)
-	for _, art := range artefacts {
-		counts[art.Release]++
-	}
-
-	// Sort releases alphabetically for deterministic output.
-	releases := make([]string, 0, len(counts))
-	for r := range counts {
-		releases = append(releases, r)
-	}
-	sort.Strings(releases)
-
-	var sb strings.Builder
-	sb.WriteString("**Known releases:**\n\n")
-	for _, r := range releases {
-		sb.WriteString(fmt.Sprintf("- **%s** (%d artefacts)\n", r, counts[r]))
 	}
 	return hook.Send(sb.String())
 }
@@ -135,10 +121,9 @@ func helpText() string {
 
 | Command | Description |
 |---------|-------------|
-| ` + "`status`" + `           | Current build status table for the latest release |
-| ` + "`builds <release>`" + ` | All builds for a specific release (e.g. ` + "`builds noble`" + `) |
-| ` + "`releases`" + `         | List all known releases |
-| ` + "`help`" + `             | Show this message |
+| ` + "`builds status`" + `           | Build summary for all releases with progress bar |
+| ` + "`builds status <release>`" + ` | Detailed build status for a specific release |
+| ` + "`help`" + `                    | Show this message |
 
 Proactive change reports are posted automatically when build statuses change.`
 }
