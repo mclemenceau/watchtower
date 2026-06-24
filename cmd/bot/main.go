@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"flag"
+	"io"
 	"log"
 	"os"
 
@@ -19,9 +21,19 @@ import (
 const taskQueue = "argus"
 
 func main() {
+	verbose := flag.Bool("v", false, "enable verbose logging")
+	flag.Parse()
+
+	// Silence Go's standard logger and the Temporal SDK logger unless -v is set.
+	if !*verbose {
+		log.SetOutput(io.Discard)
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("config: %v", err)
+		// Always print fatal config errors regardless of verbosity.
+		os.Stderr.WriteString("config: " + err.Error() + "\n")
+		os.Exit(1)
 	}
 
 	// Select webhook client: real Mattermost or stdout simulation.
@@ -36,12 +48,15 @@ func main() {
 
 	snap := state.New("state/snapshot.json")
 
-	// Connect to Temporal.
+	// Connect to Temporal. Pass a no-op logger to suppress SDK output.
+	temporalLogger := newTemporalLogger(*verbose)
 	c, err := client.Dial(client.Options{
 		HostPort: cfg.TemporalHost,
+		Logger:   temporalLogger,
 	})
 	if err != nil {
-		log.Fatalf("bot: dial temporal: %v", err)
+		os.Stderr.WriteString("bot: dial temporal: " + err.Error() + "\n")
+		os.Exit(1)
 	}
 	defer c.Close()
 
@@ -53,7 +68,9 @@ func main() {
 	}
 
 	// Register and start the Temporal worker in the background.
-	w := worker.New(c, taskQueue, worker.Options{})
+	w := worker.New(c, taskQueue, worker.Options{
+		WorkerStopTimeout: 0,
+	})
 	w.RegisterWorkflow(argusworkflow.ChangeWatchWorkflow)
 	w.RegisterActivity(act)
 
