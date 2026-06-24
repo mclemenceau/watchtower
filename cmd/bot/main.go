@@ -92,8 +92,19 @@ func main() {
 
 	log.Printf("bot started on task queue %q (temporal: %s)", taskQueue, cfg.TemporalHost)
 
+	// Start the Mattermost channel poller in the background (no-op when credentials are absent).
+	pollerCtx, cancelPoller := context.WithCancel(context.Background())
+	defer cancelPoller()
+	go mattermost.RunPoller(pollerCtx, mattermost.PollerConfig{
+		ServerURL: cfg.MattermostServerURL,
+		Token:     cfg.MattermostToken,
+		ChannelID: cfg.MattermostChannelID,
+		Interval:  cfg.MattermostPollInterval,
+		Keyword:   cfg.WatchtowerKeyword,
+	}, snap, cfg.DefaultRelease, hook, nil)
+
 	// Run the interactive REPL — blocks until stdin is closed or Ctrl-D.
-	mattermost.RunREPL(context.Background(), os.Stdin, hook, snap, cfg.DefaultRelease)
+	mattermost.RunREPL(context.Background(), os.Stdin, hook, snap, cfg.DefaultRelease, cfg.WatchtowerKeyword)
 }
 
 func startCronWorkflows(c client.Client) {

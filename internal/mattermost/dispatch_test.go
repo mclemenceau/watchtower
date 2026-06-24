@@ -36,7 +36,7 @@ var testArtefacts = []buildapi.Artefact{
 
 func TestDispatchHelp(t *testing.T) {
 	hook := &captureHook{}
-	if err := Dispatch("help", testArtefacts, "", hook); err != nil {
+	if err := Dispatch("help", testArtefacts, "", hook, ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	for _, want := range []string{"builds status", "builds status <release>", "help"} {
@@ -48,7 +48,7 @@ func TestDispatchHelp(t *testing.T) {
 
 func TestDispatchHelpCaseInsensitive(t *testing.T) {
 	hook := &captureHook{}
-	if err := Dispatch("HELP", testArtefacts, "", hook); err != nil {
+	if err := Dispatch("HELP", testArtefacts, "", hook, ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "builds status") {
@@ -60,7 +60,7 @@ func TestDispatchHelpCaseInsensitive(t *testing.T) {
 
 func TestDispatchBuildsStatus(t *testing.T) {
 	hook := &captureHook{}
-	if err := Dispatch("builds status", testArtefacts, "", hook); err != nil {
+	if err := Dispatch("builds status", testArtefacts, "", hook, ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	// Both releases must appear.
@@ -81,7 +81,7 @@ func TestDispatchBuildsStatus(t *testing.T) {
 
 func TestDispatchBuildsStatusCaseInsensitive(t *testing.T) {
 	hook := &captureHook{}
-	if err := Dispatch("Builds Status", testArtefacts, "", hook); err != nil {
+	if err := Dispatch("Builds Status", testArtefacts, "", hook, ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "noble") {
@@ -91,7 +91,7 @@ func TestDispatchBuildsStatusCaseInsensitive(t *testing.T) {
 
 func TestDispatchBuildsStatusEmptySnapshot(t *testing.T) {
 	hook := &captureHook{}
-	if err := Dispatch("builds status", nil, "", hook); err != nil {
+	if err := Dispatch("builds status", nil, "", hook, ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "No snapshot") {
@@ -103,7 +103,7 @@ func TestDispatchBuildsStatusEmptySnapshot(t *testing.T) {
 
 func TestDispatchBuildsStatusRelease(t *testing.T) {
 	hook := &captureHook{}
-	if err := Dispatch("builds status noble", testArtefacts, "", hook); err != nil {
+	if err := Dispatch("builds status noble", testArtefacts, "", hook, ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "noble") {
@@ -130,7 +130,7 @@ func TestDispatchBuildsStatusRelease(t *testing.T) {
 
 func TestDispatchBuildsStatusReleaseCaseInsensitive(t *testing.T) {
 	hook := &captureHook{}
-	if err := Dispatch("builds status Noble", testArtefacts, "", hook); err != nil {
+	if err := Dispatch("builds status Noble", testArtefacts, "", hook, ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "ubuntu-desktop-amd64") {
@@ -140,7 +140,7 @@ func TestDispatchBuildsStatusReleaseCaseInsensitive(t *testing.T) {
 
 func TestDispatchBuildsStatusReleaseUnknown(t *testing.T) {
 	hook := &captureHook{}
-	if err := Dispatch("builds status nonexistent", testArtefacts, "", hook); err != nil {
+	if err := Dispatch("builds status nonexistent", testArtefacts, "", hook, ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "No artefacts found") {
@@ -152,7 +152,7 @@ func TestDispatchBuildsStatusReleaseUnknown(t *testing.T) {
 
 func TestDispatchBuildsNoArgs(t *testing.T) {
 	hook := &captureHook{}
-	if err := Dispatch("builds", testArtefacts, "", hook); err != nil {
+	if err := Dispatch("builds", testArtefacts, "", hook, ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "Usage") {
@@ -162,7 +162,7 @@ func TestDispatchBuildsNoArgs(t *testing.T) {
 
 func TestDispatchBuildsUnknownSubcommand(t *testing.T) {
 	hook := &captureHook{}
-	if err := Dispatch("builds noble", testArtefacts, "", hook); err != nil {
+	if err := Dispatch("builds noble", testArtefacts, "", hook, ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "Usage") {
@@ -174,7 +174,7 @@ func TestDispatchBuildsUnknownSubcommand(t *testing.T) {
 
 func TestDispatchUnknown(t *testing.T) {
 	hook := &captureHook{}
-	if err := Dispatch("banana", testArtefacts, "", hook); err != nil {
+	if err := Dispatch("banana", testArtefacts, "", hook, ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "didn't understand") {
@@ -187,7 +187,7 @@ func TestDispatchUnknown(t *testing.T) {
 
 func TestDispatchEmpty(t *testing.T) {
 	hook := &captureHook{}
-	if err := Dispatch("   ", testArtefacts, "", hook); err != nil {
+	if err := Dispatch("   ", testArtefacts, "", hook, ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	// Empty message — nothing should be sent.
@@ -232,7 +232,7 @@ func TestBuildsStatusProgressBar(t *testing.T) {
 		{ID: 5, Release: "noble", Version: today},
 	}
 	hook := &captureHook{}
-	if err := Dispatch("builds status", artefacts, "", hook); err != nil {
+	if err := Dispatch("builds status", artefacts, "", hook, ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	wantBar := strings.Repeat("🟩", 10)
@@ -251,7 +251,7 @@ func TestBuildsStatusProgressBarZero(t *testing.T) {
 		{ID: 2, Release: "noble", Version: yesterday},
 	}
 	hook := &captureHook{}
-	if err := Dispatch("builds status", artefacts, "", hook); err != nil {
+	if err := Dispatch("builds status", artefacts, "", hook, ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	wantBar := strings.Repeat("🟥", 10)

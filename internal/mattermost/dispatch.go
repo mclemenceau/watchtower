@@ -11,10 +11,28 @@ import (
 
 // Dispatch routes an incoming message to the appropriate handler and sends the
 // reply via hook. artefacts is the current snapshot (may be nil/empty on first boot).
-func Dispatch(msg string, artefacts []buildapi.Artefact, defaultRelease string, hook WebhookClient) error {
+//
+// keyword is the optional trigger prefix (e.g. "@watchtower"). When set, messages
+// that do NOT start with the keyword are silently ignored, and the keyword is
+// stripped before routing. Pass an empty string to disable keyword filtering
+// (every message is dispatched).
+func Dispatch(msg string, artefacts []buildapi.Artefact, defaultRelease string, hook WebhookClient, keyword string) error {
 	msg = strings.TrimSpace(msg)
 	if msg == "" {
 		return nil
+	}
+
+	// Keyword filtering: if a keyword is configured, only process messages that
+	// start with it (case-insensitive), then strip the prefix.
+	if kw := strings.ToLower(strings.TrimSpace(keyword)); kw != "" {
+		lower := strings.ToLower(msg)
+		if !strings.HasPrefix(lower, kw) {
+			return nil // not addressed to us
+		}
+		msg = strings.TrimSpace(msg[len(kw):])
+		if msg == "" {
+			msg = "help" // bare keyword → show help
+		}
 	}
 
 	lower := strings.ToLower(msg)

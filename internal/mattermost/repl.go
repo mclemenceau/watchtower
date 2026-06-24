@@ -18,8 +18,9 @@ type SnapshotReader func() ([]buildapi.Artefact, error)
 // RunREPL reads lines from in (simulating incoming Mattermost messages), dispatches
 // each to Dispatch, and sends replies via hook. Blocks until in is closed or ctx
 // is cancelled. defaultRelease pins the status table to a specific release (empty =
-// auto-detect from snapshot).
-func RunREPL(ctx context.Context, in io.Reader, hook WebhookClient, snap *state.Snapshot, defaultRelease string) {
+// auto-detect from snapshot). keyword is the optional trigger prefix (e.g.
+// "@watchtower"); pass empty string to dispatch every line regardless of prefix.
+func RunREPL(ctx context.Context, in io.Reader, hook WebhookClient, snap *state.Snapshot, defaultRelease string, keyword string) {
 	fmt.Println("[ARGUS] Bot started. Type a message (Ctrl-D to quit):")
 	fmt.Print("you> ")
 
@@ -51,7 +52,7 @@ func RunREPL(ctx context.Context, in io.Reader, hook WebhookClient, snap *state.
 			continue
 		}
 
-		if dispatchErr := Dispatch(line, artefacts, defaultRelease, hook); dispatchErr != nil {
+		if dispatchErr := Dispatch(line, artefacts, defaultRelease, hook, keyword); dispatchErr != nil {
 			fmt.Printf("[ARGUS] error: %v\n", dispatchErr)
 		}
 
