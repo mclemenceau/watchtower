@@ -63,8 +63,15 @@ func main() {
 		}
 	}()
 
+	// Terminate any stale workflows whose types are no longer registered.
+	terminateStaleWorkflows(c, "status-table", "query")
+
 	// Start cron workflow (idempotent — Temporal ignores if already running).
 	startCronWorkflows(c)
+
+	// If the snapshot is empty (first boot), trigger an immediate fetch so
+	// commands work right away without waiting up to 10 min for the cron.
+	triggerInitialFetch(c, snap)
 
 	log.Printf("bot started on task queue %q (temporal: %s)", taskQueue, cfg.TemporalHost)
 
@@ -86,5 +93,46 @@ func startCronWorkflows(c client.Client) {
 		log.Printf("note: change-watch cron start: %v", err)
 	} else {
 		log.Print("change-watch cron scheduled (every 10 min)")
+	}
+}
+
+// terminateStaleWorkflows terminates workflows by ID that are no longer
+// supported by this version of the bot (e.g. removed workflow types).
+// Errors are logged and ignored — the workflow may already be gone.
+func terminateStaleWorkflows(c client.Client, ids ...string) {
+	for _, id := range ids {
+		err := c.TerminateWorkflow(context.Background(), id, "", "workflow type removed in bot redesign")
+		if err != nil {
+			log.Printf("note: terminate stale workflow %q: %v", id, err)
+		} else {
+			log.Printf("terminated stale workflow %q", id)
+		}
+	}
+}
+
+// triggerInitialFetch runs one ChangeWatchWorkflow synchronously if the snapshot
+// is empty, so commands are usable immediately on first boot.
+func triggerInitialFetch(c client.Client, snap *state.Snapshot) {
+	artefacts, err := snap.Read()
+	if err != nil || len(artefacts) > 0 {
+		return // snapshot already populated or unreadable — don't block
+	}
+	log.Print("snapshot empty — triggering initial fetch (this may take a few seconds)...")
+	run, err := c.ExecuteWorkflow(
+		context.Background(),
+		client.StartWorkflowOptions{
+			ID:        "change-watch-init",
+			TaskQueue: taskQueue,
+		},
+		argusworkflow.ChangeWatchWorkflow,
+	)
+	if err != nil {
+		log.Printf("note: initial fetch start: %v", err)
+		return
+	}
+	if err := run.Get(context.Background(), nil); err != nil {
+		log.Printf("note: initial fetch: %v", err)
+	} else {
+		log.Print("initial fetch complete")
 	}
 }
