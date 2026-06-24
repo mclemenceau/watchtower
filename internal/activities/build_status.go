@@ -67,7 +67,7 @@ func (a *Activities) FormatStatusTable(_ context.Context, artefacts []buildapi.A
 	sb.WriteString("|------|---------|---------|-----|--------|\n")
 	for _, art := range filtered {
 		fmt.Fprintf(&sb, "| %s | %s | %s | %s | %s |\n",
-			art.Name, art.OS, art.Release, imageAge(art.Version), statusEmoji(art.Status))
+			art.Name, art.OS, art.Release, imageAge(art.Version), buildStatus(art.Version))
 	}
 	return sb.String(), nil
 }
@@ -80,15 +80,21 @@ func (a *Activities) NotifyChannel(_ context.Context, text string) error {
 	return nil
 }
 
-func statusEmoji(status string) string {
-	switch status {
-	case "APPROVED":
-		return "✅ approved"
-	case "MARKED_AS_FAILED":
-		return "❌ failed"
-	default:
-		return "⏳ pending"
+// isBuiltToday returns true if the version's base date (YYYYMMDD) matches today in UTC.
+func isBuiltToday(version string) bool {
+	base := version
+	if i := strings.IndexByte(version, '.'); i != -1 {
+		base = version[:i]
 	}
+	return base == time.Now().UTC().Format("20060102")
+}
+
+// buildStatus returns a display string reflecting whether the image was built today.
+func buildStatus(version string) string {
+	if isBuiltToday(version) {
+		return "✅ built"
+	}
+	return "❌ not built"
 }
 
 // imageAge returns a human-readable age string for a YYYYMMDD or YYYYMMDD.N version field.

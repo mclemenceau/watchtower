@@ -5,11 +5,11 @@ package buildapi
 type Artefact struct {
 	ID       int    `json:"id"`
 	Name     string `json:"name"`
-	Version  string `json:"version"` // YYYYMMDD build date
+	Version  string `json:"version"` // YYYYMMDD or YYYYMMDD.N (respin); today's date means build succeeded and image is available for testing
 	OS       string `json:"os"`
 	Release  string `json:"release"`
-	Stage    string `json:"stage"`  // pending | current
-	Status   string `json:"status"` // APPROVED | MARKED_AS_FAILED | UNDECIDED
+	Stage    string `json:"stage"`  // pending | current — pipeline release stage, not build state
+	Status   string `json:"status"` // APPROVED | MARKED_AS_FAILED | UNDECIDED — test review state, unrelated to build availability
 	Archived bool   `json:"archived"`
 	ImageURL string `json:"image_url"`
 }

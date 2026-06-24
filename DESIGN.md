@@ -85,6 +85,16 @@ type ArtefactDelta struct {
 }
 ```
 
+## Artefact lifecycle
+
+An artefact's presence in Test Observer is the signal that a build succeeded:
+
+- **Present with today's version** (`YYYYMMDD` or `YYYYMMDD.N`) — build completed; image is available for testing.
+- **Present with an older version** — today's build has not landed yet. The cause is indistinguishable from ARGUS's perspective: the build may not have started, may be in progress, or may have failed at the pipeline level before reaching Test Observer.
+- **Absent entirely** — the artefact has never been seen, or is no longer tracked by Test Observer.
+
+The `Status` field (`APPROVED` / `UNDECIDED` / `MARKED_AS_FAILED`) is the **test review state** set by humans after testing. It is orthogonal to build availability and is not used in the status table.
+
 ## Workflow data flow
 
 ### ChangeWatchWorkflow (every 10 min)
