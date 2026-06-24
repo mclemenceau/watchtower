@@ -23,7 +23,20 @@ DEFAULT_RELEASE        # Pin status table to a release; empty = auto-detect
 
 ## Running locally
 
-### Option A — Docker Compose (recommended)
+### Option B — 2 terminals (recommended for active development)
+```
+# terminal 1
+temporal server start-dev
+
+# terminal 2
+make run-bot   # or: go run ./cmd/bot/
+```
+Type commands at the `you>` prompt. No API keys required.
+
+To restart after a code change: `Ctrl-C` in terminal 2, then `make run-bot` again.
+To wipe the local snapshot and start fresh: `make clean-state` before `make run-bot`.
+
+### Option A — Docker Compose (demo / staging)
 ```
 cp .env.example .env          # no required vars; optionally set MATTERMOST_WEBHOOK_URL
 make up                       # builds images, starts temporal + bot
@@ -32,29 +45,24 @@ make down                     # tear down (state volume is preserved)
 Services exposed:
 - http://localhost:8233  — Temporal Web UI
 
-Note: in Docker Compose the bot runs in a container. For interactive REPL use Option B.
-
-### Option B — 2 terminals (no Docker)
-```
-# terminal 1
-temporal server start-dev
-
-# terminal 2
-make run-bot   # or: go run ./cmd/bot/
-```
-Type commands at the `you>` prompt. No API keys required for local development.
+Note: the REPL runs inside the bot container. Attach with:
+`docker attach $(docker compose ps -q bot)` — detach with `Ctrl-P Ctrl-Q`.
+For interactive development prefer Option B.
 
 ## Makefile targets
-| Target        | What it does                                  |
-|---------------|-----------------------------------------------|
-| `make build`  | Compile bot binary into `bin/`                |
-| `make clean`  | Remove `bin/`                                 |
-| `make test`   | `go test -race -count=1 ./...`                |
-| `make lint`   | `golangci-lint run ./...`                     |
-| `make check`  | lint + test (pre-commit gate)                 |
-| `make run-bot`| `go run ./cmd/bot/`                           |
-| `make up`     | `docker compose up --build -d`               |
-| `make down`   | `docker compose down`                         |
+| Target              | What it does                                                       |
+|---------------------|--------------------------------------------------------------------|
+| `make build`        | Compile bot binary into `bin/`                                     |
+| `make clean`        | Remove `bin/`                                                      |
+| `make test`         | `go test -race -count=1 ./...`                                     |
+| `make lint`         | `golangci-lint run ./...`                                          |
+| `make check`        | lint + test (pre-commit gate)                                      |
+| `make run-bot`      | `go run ./cmd/bot/` (Option B)                                     |
+| `make clean-state`  | Delete `state/snapshot.json` (force fresh fetch on next start)     |
+| `make up`           | `docker compose up --build -d` (Option A)                          |
+| `make down`         | `docker compose down` (keeps volumes)                              |
+| `make restart-bot`  | Rebuild + restart only the bot container (Temporal keeps running)  |
+| `make reset`        | `down -v` + `up` — full wipe of all volumes and fresh start        |
 
 ## Test strategy
 Test these:   state/snapshot.go (diff logic), analyze_log.go (JSON parsing), mattermost/dispatch.go (command routing)
