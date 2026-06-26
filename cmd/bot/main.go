@@ -141,13 +141,22 @@ func terminateStaleWorkflows(c client.Client, ids ...string) {
 }
 
 // triggerInitialFetch runs one ChangeWatchWorkflow synchronously if the snapshot
-// is empty, so commands are usable immediately on first boot.
+// is empty or contains no test execution data (e.g. first boot after the tests
+// feature was added), so commands are usable immediately on first boot.
 func triggerInitialFetch(c client.Client, snap *state.Snapshot) {
 	artefacts, err := snap.Read()
-	if err != nil || len(artefacts) > 0 {
-		return // snapshot already populated or unreadable — don't block
+	if err != nil {
+		return // unreadable — don't block
 	}
-	log.Print("snapshot empty — triggering initial fetch (this may take a few seconds)...")
+	// Skip if snapshot is already fully populated (has artefacts with builds).
+	if len(artefacts) > 0 && hasTestData(artefacts) {
+		return
+	}
+	if len(artefacts) == 0 {
+		log.Print("snapshot empty — triggering initial fetch (this may take a few minutes)...")
+	} else {
+		log.Print("snapshot has no test data — triggering enrichment fetch (this may take a few minutes)...")
+	}
 	run, err := c.ExecuteWorkflow(
 		context.Background(),
 		client.StartWorkflowOptions{
@@ -165,4 +174,14 @@ func triggerInitialFetch(c client.Client, snap *state.Snapshot) {
 	} else {
 		log.Print("initial fetch complete")
 	}
+}
+
+// hasTestData returns true if at least one artefact has build/test data cached.
+func hasTestData(artefacts []buildapi.Artefact) bool {
+	for _, a := range artefacts {
+		if len(a.Builds) > 0 {
+			return true
+		}
+	}
+	return false
 }
