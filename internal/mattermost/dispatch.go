@@ -152,7 +152,7 @@ func handleBuildsStatusRelease(artefacts []buildapi.Artefact, release, product s
 	sb.WriteString("|----------|---------|---------|-----|-------|\n")
 	for _, art := range filtered {
 		fmt.Fprintf(&sb, "| %s | %s | %s | %s | %s |\n",
-			art.Name, art.OS, art.Version, buildapi.ImageAge(art.Version), buildapi.BuildStatus(art.Version))
+			art.Name, art.OS, art.Version, buildapi.ImageAge(art.Version), buildapi.BuildStatus(art.Version, art.ImageURL))
 	}
 	return hook.Send(sb.String())
 }

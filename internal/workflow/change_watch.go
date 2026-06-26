@@ -53,19 +53,48 @@ func ChangeWatchWorkflow(ctx sdk.Context) error {
 
 func formatChangeReport(r buildapi.ChangeReport) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("=== Change Report (%s) ===\n", time.Now().UTC().Format("15:04 UTC")))
-	for _, f := range r.NewFailures {
-		sb.WriteString(fmt.Sprintf("🔴 FAILED     %s  %s  (was %s)\n", f.Release, f.Name, f.OldStatus))
+	fmt.Fprintf(&sb, "**Change Report** · %s\n\n", time.Now().UTC().Format("2006-01-02 15:04 UTC"))
+
+	if len(r.NewFailures) > 0 {
+		sb.WriteString("🔴 **New Failures**\n\n")
+		sb.WriteString("| Release | Artefact | Previous Status |\n")
+		sb.WriteString("|---------|----------|-----------------|\n")
+		for _, f := range r.NewFailures {
+			fmt.Fprintf(&sb, "| %s | %s | %s |\n", f.Release, f.Name, f.OldStatus)
+		}
+		sb.WriteString("\n")
 	}
-	for _, rec := range r.Recoveries {
-		sb.WriteString(fmt.Sprintf("🟢 APPROVED   %s  %s  (was MARKED_AS_FAILED)\n", rec.Release, rec.Name))
+
+	if len(r.Recoveries) > 0 {
+		sb.WriteString("🟢 **Recoveries**\n\n")
+		sb.WriteString("| Release | Artefact |\n")
+		sb.WriteString("|---------|----------|\n")
+		for _, rec := range r.Recoveries {
+			fmt.Fprintf(&sb, "| %s | %s |\n", rec.Release, rec.Name)
+		}
+		sb.WriteString("\n")
 	}
-	for _, o := range r.OtherChanges {
-		sb.WriteString(fmt.Sprintf("🔵 CHANGED    %s  %s  (%s → %s)\n", o.Release, o.Name, o.OldStatus, o.NewStatus))
+
+	if len(r.OtherChanges) > 0 {
+		sb.WriteString("🔵 **Other Changes**\n\n")
+		sb.WriteString("| Release | Artefact | Old Status | New Status |\n")
+		sb.WriteString("|---------|----------|------------|------------|\n")
+		for _, o := range r.OtherChanges {
+			fmt.Fprintf(&sb, "| %s | %s | %s | %s |\n", o.Release, o.Name, o.OldStatus, o.NewStatus)
+		}
+		sb.WriteString("\n")
 	}
-	for _, n := range r.NewArtefacts {
-		sb.WriteString(fmt.Sprintf("🆕 NEW        %s  %s  v%s\n", n.Release, n.Name, n.Version))
+
+	if len(r.NewArtefacts) > 0 {
+		sb.WriteString("🆕 **New Artefacts**\n\n")
+		sb.WriteString("| Release | Product | Artefact | Version | Age | Build |\n")
+		sb.WriteString("|---------|---------|----------|---------|-----|-------|\n")
+		for _, n := range r.NewArtefacts {
+			fmt.Fprintf(&sb, "| %s | %s | %s | %s | %s | %s |\n",
+				n.Release, n.OS, n.Name, n.Version, buildapi.ImageAge(n.Version), buildapi.BuildStatus(n.Version, n.ImageURL))
+		}
 	}
+
 	return sb.String()
 }
 

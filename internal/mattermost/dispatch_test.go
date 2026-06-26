@@ -148,6 +148,38 @@ func TestDispatchBuildsStatusReleaseUnknown(t *testing.T) {
 	}
 }
 
+// --- builds status: log hyperlink for unbuilt artefact ---
+
+func TestDispatchBuildsStatusReleaseLogLink(t *testing.T) {
+	imageURL := "https://cdimage.ubuntu.com/ubuntu-server/noble/daily-live/20200101/noble-live-server-amd64.iso"
+	logURL := "https://ubuntu-archive-team.ubuntu.com/cd-build-logs/ubuntu-server/noble/daily-live-20200101.log"
+	artefacts := []buildapi.Artefact{
+		// old version + imageURL → should produce a hyperlink
+		{ID: 1, Name: "ubuntu-server-amd64", OS: "ubuntu-server", Release: "noble", Version: "20200101", ImageURL: imageURL},
+		// old version + no imageURL → plain fallback
+		{ID: 2, Name: "ubuntu-desktop-amd64", OS: "ubuntu", Release: "noble", Version: "20200101"},
+	}
+	hook := &captureHook{}
+	if err := Dispatch("builds status noble", artefacts, "", hook, ""); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	wantLink := "[not built](" + logURL + ")"
+	if !strings.Contains(hook.last, wantLink) {
+		t.Errorf("expected Markdown log hyperlink %q in output, got:\n%s", wantLink, hook.last)
+	}
+	// The artefact without an imageURL must still show the plain fallback
+	if !strings.Contains(hook.last, "❌ not built") {
+		t.Errorf("expected plain '❌ not built' fallback for artefact without imageURL, got:\n%s", hook.last)
+	}
+	// The server row (with imageURL) must use the hyperlink, not the plain text
+	serverRow := "| ubuntu-server-amd64 | ubuntu-server |"
+	for _, line := range strings.Split(hook.last, "\n") {
+		if strings.Contains(line, serverRow) && strings.Contains(line, "❌ not built") && !strings.Contains(line, "[not built]") {
+			t.Errorf("artefact with imageURL should use hyperlink, not plain '❌ not built'; got line:\n%s", line)
+		}
+	}
+}
+
 // --- builds status <release> <product> (product filter) ---
 
 func TestDispatchBuildsStatusReleaseProduct(t *testing.T) {

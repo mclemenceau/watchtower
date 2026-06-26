@@ -75,7 +75,7 @@ func (a *Activities) FormatStatusTable(_ context.Context, artefacts []buildapi.A
 	sb.WriteString("|------|---------|---------|-----|--------|\n")
 	for _, art := range filtered {
 		fmt.Fprintf(&sb, "| %s | %s | %s | %s | %s |\n",
-			art.Name, art.OS, art.Release, buildapi.ImageAge(art.Version), buildapi.BuildStatus(art.Version))
+			art.Name, art.OS, art.Release, buildapi.ImageAge(art.Version), buildapi.BuildStatus(art.Version, art.ImageURL))
 	}
 	return sb.String(), nil
 }
