@@ -19,9 +19,22 @@ func ChangeWatchWorkflow(ctx sdk.Context) error {
 
 	var act *activities.Activities
 
+	// Fetch fresh artefact list from Test Observer.
 	var fresh []buildapi.Artefact
 	if err := sdk.ExecuteActivity(ctx, act.FetchBuildStatus).Get(ctx, &fresh); err != nil {
 		return err
+	}
+
+	// Enrich each artefact with its test execution data (one API call per artefact).
+	// Use a longer timeout for this activity since it fans out across all artefacts.
+	testCtx := sdk.WithActivityOptions(ctx, sdk.ActivityOptions{
+		StartToCloseTimeout: 5 * time.Minute,
+	})
+	var enriched []buildapi.Artefact
+	if err := sdk.ExecuteActivity(testCtx, act.FetchTestExecutions, fresh).Get(testCtx, &enriched); err != nil {
+		// Non-fatal: fall back to unenriched artefacts so builds still work.
+		sdk.GetLogger(ctx).Warn("FetchTestExecutions failed, test data will be stale", "error", err)
+		enriched = fresh
 	}
 
 	var old []buildapi.Artefact
@@ -29,9 +42,9 @@ func ChangeWatchWorkflow(ctx sdk.Context) error {
 		return err
 	}
 
-	report := state.Diff(old, fresh)
+	report := state.Diff(old, enriched)
 
-	if err := sdk.ExecuteActivity(ctx, act.SaveSnapshot, fresh).Get(ctx, nil); err != nil {
+	if err := sdk.ExecuteActivity(ctx, act.SaveSnapshot, enriched).Get(ctx, nil); err != nil {
 		return err
 	}
 

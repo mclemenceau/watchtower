@@ -15,6 +15,7 @@ import (
 	"github.com/mclemenceau/argus/internal/config"
 	"github.com/mclemenceau/argus/internal/mattermost"
 	"github.com/mclemenceau/argus/internal/state"
+	"github.com/mclemenceau/argus/internal/testapi"
 	argusworkflow "github.com/mclemenceau/argus/internal/workflow"
 )
 
@@ -62,6 +63,7 @@ func main() {
 
 	act := &activities.Activities{
 		Artefacts:      buildapi.NewHTTPClient(cfg.TestObserverURL),
+		Tests:          testapi.NewHTTPTestClient(cfg.TestObserverURL),
 		Snapshot:       snap,
 		Hook:           hook,
 		DefaultRelease: cfg.DefaultRelease,

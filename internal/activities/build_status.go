@@ -11,11 +11,13 @@ import (
 	"github.com/mclemenceau/argus/internal/llm"
 	"github.com/mclemenceau/argus/internal/mattermost"
 	"github.com/mclemenceau/argus/internal/state"
+	"github.com/mclemenceau/argus/internal/testapi"
 )
 
 // Activities holds the dependencies injected at worker startup.
 type Activities struct {
 	Artefacts      buildapi.ArtefactClient
+	Tests          testapi.TestClient
 	Snapshot       *state.Snapshot
 	Hook           mattermost.WebhookClient
 	DefaultRelease string // pin status table to this release; empty = auto-detect
@@ -29,6 +31,23 @@ func (a *Activities) FetchBuildStatus(ctx context.Context) ([]buildapi.Artefact,
 		return nil, fmt.Errorf("FetchBuildStatus: %w", err)
 	}
 	return artefacts, nil
+}
+
+// FetchTestExecutions enriches each artefact with its build/test execution data
+// by calling the Test Observer API once per artefact. Errors for individual
+// artefacts are logged and skipped rather than aborting the whole fetch.
+func (a *Activities) FetchTestExecutions(ctx context.Context, artefacts []buildapi.Artefact) ([]buildapi.Artefact, error) {
+	enriched := make([]buildapi.Artefact, len(artefacts))
+	copy(enriched, artefacts)
+	for i, art := range enriched {
+		builds, err := a.Tests.FetchBuilds(ctx, art.ID)
+		if err != nil {
+			// Non-fatal: leave Builds empty for this artefact.
+			continue
+		}
+		enriched[i].Builds = builds
+	}
+	return enriched, nil
 }
 
 func (a *Activities) LoadSnapshot(_ context.Context) ([]buildapi.Artefact, error) {

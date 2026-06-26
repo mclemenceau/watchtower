@@ -10,16 +10,45 @@ const baseLogURL = "https://ubuntu-archive-team.ubuntu.com/cd-build-logs"
 
 // Artefact mirrors the Test Observer API ArtefactResponse for the image family.
 // Only fields used by ARGUS are included; extra API fields are silently discarded.
+// Builds is populated by the cron workflow and cached in the snapshot; it is
+// omitted from JSON when empty so existing snapshot files remain compatible.
 type Artefact struct {
-	ID       int    `json:"id"`
-	Name     string `json:"name"`
-	Version  string `json:"version"` // YYYYMMDD or YYYYMMDD.N (respin); today's date means build succeeded and image is available for testing
-	OS       string `json:"os"`
-	Release  string `json:"release"`
-	Stage    string `json:"stage"`  // pending | current — pipeline release stage, not build state
-	Status   string `json:"status"` // APPROVED | MARKED_AS_FAILED | UNDECIDED — test review state, unrelated to build availability
-	Archived bool   `json:"archived"`
-	ImageURL string `json:"image_url"`
+	ID       int             `json:"id"`
+	Name     string          `json:"name"`
+	Version  string          `json:"version"` // YYYYMMDD or YYYYMMDD.N (respin); today's date means build succeeded and image is available for testing
+	OS       string          `json:"os"`
+	Release  string          `json:"release"`
+	Stage    string          `json:"stage"`  // pending | current — pipeline release stage, not build state
+	Status   string          `json:"status"` // APPROVED | MARKED_AS_FAILED | UNDECIDED — test review state, unrelated to build availability
+	Archived bool            `json:"archived"`
+	ImageURL string          `json:"image_url"`
+	Builds   []ArtefactBuild `json:"builds,omitempty"` // cached from /v1/artefacts/{id}/builds
+}
+
+// ArtefactBuild represents one architecture-specific build of an artefact,
+// with its associated test executions.
+type ArtefactBuild struct {
+	ID             int             `json:"id"`
+	Architecture   string          `json:"architecture"`
+	Revision       *int            `json:"revision,omitempty"`
+	TestExecutions []TestExecution `json:"test_executions"`
+}
+
+// TestExecution represents a single test run within an ArtefactBuild.
+type TestExecution struct {
+	ID          int         `json:"id"`
+	CILink      string      `json:"ci_link"`
+	Status      string      `json:"status"`
+	TestPlan    string      `json:"test_plan"`
+	Environment Environment `json:"environment"`
+	CreatedAt   string      `json:"created_at"`
+}
+
+// Environment describes the machine or runner that executed the tests.
+type Environment struct {
+	ID           int    `json:"id"`
+	Name         string `json:"name"`
+	Architecture string `json:"architecture"`
 }
 
 type ChangeReport struct {
