@@ -46,10 +46,13 @@ func Dispatch(msg string, artefacts []buildapi.Artefact, defaultRelease string, 
 		return handleBuildsStatus(artefacts, hook)
 
 	case strings.HasPrefix(lower, "builds status ") && len(parts) == 3:
-		return handleBuildsStatusRelease(artefacts, parts[2], hook)
+		return handleBuildsStatusRelease(artefacts, parts[2], "", hook)
+
+	case strings.HasPrefix(lower, "builds status ") && len(parts) == 4:
+		return handleBuildsStatusRelease(artefacts, parts[2], parts[3], hook)
 
 	case lower == "builds" || (strings.HasPrefix(lower, "builds") && len(parts) == 2):
-		return hook.Send("Usage: `builds status` · `builds status <release>`")
+		return hook.Send("Usage: `builds status` · `builds status <release>` · `builds status <release> <product>`")
 
 	default:
 		return hook.Send(fmt.Sprintf("I didn't understand `%s`. Type `help` for available commands.", msg))
@@ -75,7 +78,7 @@ func handleBuildsStatus(artefacts []buildapi.Artefact, hook WebhookClient) error
 			stats[art.Release] = s
 		}
 		s.total++
-		if isBuiltToday(art.Version) {
+		if buildapi.IsBuiltToday(art.Version) {
 			s.built++
 		}
 	}
@@ -106,30 +109,50 @@ func handleBuildsStatus(artefacts []buildapi.Artefact, hook WebhookClient) error
 
 // handleBuildsStatusRelease renders a detail table for a single release:
 // one row per artefact with name, version, age and build status.
-func handleBuildsStatusRelease(artefacts []buildapi.Artefact, release string, hook WebhookClient) error {
+// When product is non-empty only artefacts whose OS matches (case-insensitive) are shown.
+func handleBuildsStatusRelease(artefacts []buildapi.Artefact, release, product string, hook WebhookClient) error {
 	if len(artefacts) == 0 {
 		return hook.Send("No snapshot available yet — the first fetch is still in progress.")
 	}
 
 	var filtered []buildapi.Artefact
 	for _, art := range artefacts {
-		if strings.EqualFold(art.Release, release) {
-			filtered = append(filtered, art)
+		if !strings.EqualFold(art.Release, release) {
+			continue
 		}
+		if product != "" && !strings.EqualFold(art.OS, product) {
+			continue
+		}
+		filtered = append(filtered, art)
 	}
 
 	if len(filtered) == 0 {
+		if product != "" {
+			return hook.Send(fmt.Sprintf("No artefacts found for release **%s** and product **%s**.", release, product))
+		}
 		return hook.Send(fmt.Sprintf("No artefacts found for release **%s**.", release))
 	}
 
+	sort.Slice(filtered, func(i, j int) bool {
+		if filtered[i].OS != filtered[j].OS {
+			return filtered[i].OS < filtered[j].OS
+		}
+		return filtered[i].Name < filtered[j].Name
+	})
+
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "**Build Status — %s** · %s\n\n",
-		release, time.Now().UTC().Format("2006-01-02 15:04 UTC"))
+	if product != "" {
+		fmt.Fprintf(&sb, "**Build Status** · %s · %s · %s\n\n",
+			release, product, time.Now().UTC().Format("2006-01-02 15:04 UTC"))
+	} else {
+		fmt.Fprintf(&sb, "**Build Status** · %s · %s\n\n",
+			release, time.Now().UTC().Format("2006-01-02 15:04 UTC"))
+	}
 	sb.WriteString("| Artefact | Product | Version | Age | Build |\n")
 	sb.WriteString("|----------|---------|---------|-----|-------|\n")
 	for _, art := range filtered {
 		fmt.Fprintf(&sb, "| %s | %s | %s | %s | %s |\n",
-			art.Name, art.OS, art.Version, imageAge(art.Version), buildStatus(art.Version))
+			art.Name, art.OS, art.Version, buildapi.ImageAge(art.Version), buildapi.BuildStatus(art.Version))
 	}
 	return hook.Send(sb.String())
 }
@@ -139,61 +162,10 @@ func helpText() string {
 
 | Command | Description |
 |---------|-------------|
-| ` + "`builds status`" + `           | Build summary for all releases with progress bar |
-| ` + "`builds status <release>`" + ` | Detailed build status for a specific release |
-| ` + "`help`" + `                    | Show this message |
+| ` + "`builds status`" + `                          | Build summary for all releases with progress bar |
+| ` + "`builds status <release>`" + `                | Detailed build status for a specific release |
+| ` + "`builds status <release> <product>`" + `      | Filter detail view to a single product |
+| ` + "`help`" + `                                   | Show this message |
 
 Proactive change reports are posted automatically when build statuses change.`
-}
-
-// isBuiltToday returns true if the version's base date (YYYYMMDD) matches today in UTC.
-func isBuiltToday(version string) bool {
-	base := version
-	if i := strings.IndexByte(version, '.'); i != -1 {
-		base = version[:i]
-	}
-	return base == time.Now().UTC().Format("20060102")
-}
-
-// buildStatus returns a display string reflecting whether the image was built today.
-func buildStatus(version string) string {
-	if isBuiltToday(version) {
-		return "✅ built"
-	}
-	return "❌ not built"
-}
-
-// imageAge returns a human-readable age string for a YYYYMMDD or YYYYMMDD.N version field.
-func imageAge(version string) string {
-	if i := strings.IndexByte(version, '.'); i != -1 {
-		version = version[:i]
-	}
-	if len(version) != 8 {
-		return "unknown"
-	}
-	t, err := time.Parse("20060102", version)
-	if err != nil {
-		return "unknown"
-	}
-	days := int(time.Since(t).Hours() / 24)
-	switch {
-	case days <= 0:
-		return "today"
-	case days == 1:
-		return "1 day"
-	case days < 14:
-		return fmt.Sprintf("%d days", days)
-	case days < 60:
-		weeks := days / 7
-		if weeks == 1 {
-			return "1 week"
-		}
-		return fmt.Sprintf("%d weeks", weeks)
-	default:
-		months := days / 30
-		if months == 1 {
-			return "1 month"
-		}
-		return fmt.Sprintf("%d months", months)
-	}
 }

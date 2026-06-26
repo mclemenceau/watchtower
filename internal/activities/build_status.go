@@ -3,6 +3,7 @@ package activities
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -60,6 +61,13 @@ func (a *Activities) FormatStatusTable(_ context.Context, artefacts []buildapi.A
 		}
 	}
 
+	sort.Slice(filtered, func(i, j int) bool {
+		if filtered[i].OS != filtered[j].OS {
+			return filtered[i].OS < filtered[j].OS
+		}
+		return filtered[i].Name < filtered[j].Name
+	})
+
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "**Build Status — %s** · %s\n\n",
 		release, time.Now().UTC().Format("2006-01-02 15:04 UTC"))
@@ -67,7 +75,7 @@ func (a *Activities) FormatStatusTable(_ context.Context, artefacts []buildapi.A
 	sb.WriteString("|------|---------|---------|-----|--------|\n")
 	for _, art := range filtered {
 		fmt.Fprintf(&sb, "| %s | %s | %s | %s | %s |\n",
-			art.Name, art.OS, art.Release, imageAge(art.Version), buildStatus(art.Version))
+			art.Name, art.OS, art.Release, buildapi.ImageAge(art.Version), buildapi.BuildStatus(art.Version))
 	}
 	return sb.String(), nil
 }
@@ -78,57 +86,4 @@ func (a *Activities) NotifyChannel(_ context.Context, text string) error {
 		return fmt.Errorf("NotifyChannel: %w", err)
 	}
 	return nil
-}
-
-// isBuiltToday returns true if the version's base date (YYYYMMDD) matches today in UTC.
-func isBuiltToday(version string) bool {
-	base := version
-	if i := strings.IndexByte(version, '.'); i != -1 {
-		base = version[:i]
-	}
-	return base == time.Now().UTC().Format("20060102")
-}
-
-// buildStatus returns a display string reflecting whether the image was built today.
-func buildStatus(version string) string {
-	if isBuiltToday(version) {
-		return "✅ built"
-	}
-	return "❌ not built"
-}
-
-// imageAge returns a human-readable age string for a YYYYMMDD or YYYYMMDD.N version field.
-func imageAge(version string) string {
-	// Strip respin suffix (e.g. "20240513.2" → "20240513")
-	if i := strings.IndexByte(version, '.'); i != -1 {
-		version = version[:i]
-	}
-	if len(version) != 8 {
-		return "unknown"
-	}
-	t, err := time.Parse("20060102", version)
-	if err != nil {
-		return "unknown"
-	}
-	days := int(time.Since(t).Hours() / 24)
-	switch {
-	case days <= 0:
-		return "today"
-	case days == 1:
-		return "1 day"
-	case days < 14:
-		return fmt.Sprintf("%d days", days)
-	case days < 60:
-		weeks := days / 7
-		if weeks == 1 {
-			return "1 week"
-		}
-		return fmt.Sprintf("%d weeks", weeks)
-	default:
-		months := days / 30
-		if months == 1 {
-			return "1 month"
-		}
-		return fmt.Sprintf("%d months", months)
-	}
 }

@@ -148,6 +148,53 @@ func TestDispatchBuildsStatusReleaseUnknown(t *testing.T) {
 	}
 }
 
+// --- builds status <release> <product> (product filter) ---
+
+func TestDispatchBuildsStatusReleaseProduct(t *testing.T) {
+	hook := &captureHook{}
+	if err := Dispatch("builds status noble ubuntu-server", testArtefacts, "", hook, ""); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Only the ubuntu-server artefact should appear.
+	if !strings.Contains(hook.last, "ubuntu-server-amd64") {
+		t.Errorf("expected ubuntu-server-amd64 in output, got:\n%s", hook.last)
+	}
+	// ubuntu-desktop (OS=ubuntu) must NOT appear.
+	if strings.Contains(hook.last, "ubuntu-desktop-amd64") {
+		t.Errorf("ubuntu-desktop-amd64 should be filtered out, got:\n%s", hook.last)
+	}
+	// Header should mention the product.
+	if !strings.Contains(hook.last, "ubuntu-server") {
+		t.Errorf("expected product name in header, got:\n%s", hook.last)
+	}
+}
+
+func TestDispatchBuildsStatusReleaseProductCaseInsensitive(t *testing.T) {
+	hook := &captureHook{}
+	if err := Dispatch("builds status Noble Ubuntu-Server", testArtefacts, "", hook, ""); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(hook.last, "ubuntu-server-amd64") {
+		t.Errorf("product filter should be case-insensitive, got:\n%s", hook.last)
+	}
+	if strings.Contains(hook.last, "ubuntu-desktop-amd64") {
+		t.Errorf("ubuntu-desktop-amd64 should be filtered out, got:\n%s", hook.last)
+	}
+}
+
+func TestDispatchBuildsStatusReleaseProductUnknown(t *testing.T) {
+	hook := &captureHook{}
+	if err := Dispatch("builds status noble nonexistent-product", testArtefacts, "", hook, ""); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(hook.last, "No artefacts found") {
+		t.Errorf("expected 'No artefacts found' message, got: %s", hook.last)
+	}
+	if !strings.Contains(hook.last, "nonexistent-product") {
+		t.Errorf("error message should mention the product, got: %s", hook.last)
+	}
+}
+
 // --- builds (no args or unknown sub-command) ---
 
 func TestDispatchBuildsNoArgs(t *testing.T) {
@@ -196,7 +243,27 @@ func TestDispatchEmpty(t *testing.T) {
 	}
 }
 
-// --- imageAge ---
+func TestDispatchBuildsStatusReleaseSortedByProduct(t *testing.T) {
+	// Artefacts are intentionally ordered with ubuntu-server before ubuntu
+	// to verify that the output is sorted by product (OS) regardless.
+	artefacts := []buildapi.Artefact{
+		{ID: 1, Name: "ubuntu-server-amd64", OS: "ubuntu-server", Release: "noble", Version: today},
+		{ID: 2, Name: "ubuntu-desktop-amd64", OS: "ubuntu", Release: "noble", Version: today},
+	}
+	hook := &captureHook{}
+	if err := Dispatch("builds status noble", artefacts, "", hook, ""); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	ubuntuPos := strings.Index(hook.last, "| ubuntu-desktop-amd64 | ubuntu |")
+	ubuntuServerPos := strings.Index(hook.last, "| ubuntu-server-amd64 | ubuntu-server |")
+	if ubuntuPos == -1 || ubuntuServerPos == -1 {
+		t.Fatalf("expected both artefact rows in output, got:\n%s", hook.last)
+	}
+	if ubuntuPos > ubuntuServerPos {
+		t.Errorf("ubuntu (OS=%q) should appear before ubuntu-server (OS=%q) when sorted by product; got:\n%s",
+			"ubuntu", "ubuntu-server", hook.last)
+	}
+}
 
 func TestImageAge(t *testing.T) {
 	cases := []struct {
@@ -210,12 +277,12 @@ func TestImageAge(t *testing.T) {
 		{"", true},
 	}
 	for _, tc := range cases {
-		got := imageAge(tc.version)
+		got := buildapi.ImageAge(tc.version)
 		if tc.wantErr && got != "unknown" {
-			t.Errorf("imageAge(%q) = %q, want %q", tc.version, got, "unknown")
+			t.Errorf("buildapi.ImageAge(%q) = %q, want %q", tc.version, got, "unknown")
 		}
 		if !tc.wantErr && got == "unknown" {
-			t.Errorf("imageAge(%q) returned %q unexpectedly", tc.version, got)
+			t.Errorf("buildapi.ImageAge(%q) returned %q unexpectedly", tc.version, got)
 		}
 	}
 }
