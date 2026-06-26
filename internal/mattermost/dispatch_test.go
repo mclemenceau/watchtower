@@ -225,17 +225,20 @@ func TestDispatchBuildsStatusReleaseLogLink(t *testing.T) {
 	if err := Dispatch("builds status noble", artefacts, "", hook, ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	wantLink := "[not built](" + logURL + ")"
+	// Artefact with imageURL should have a 🔗 log link in the Log column
+	wantLink := "[🔗](" + logURL + ")"
 	if !strings.Contains(hook.last, wantLink) {
 		t.Errorf("expected Markdown log hyperlink %q in output, got:\n%s", wantLink, hook.last)
 	}
-	if !strings.Contains(hook.last, "❌ not built") {
-		t.Errorf("expected plain '❌ not built' fallback for artefact without imageURL, got:\n%s", hook.last)
-	}
+	// Artefact without imageURL should have ❌ in the Log column
 	serverRow := "| ubuntu-server-amd64 | ubuntu-server |"
+	desktopRow := "| ubuntu-desktop-amd64 | ubuntu |"
 	for _, line := range strings.Split(hook.last, "\n") {
-		if strings.Contains(line, serverRow) && strings.Contains(line, "❌ not built") && !strings.Contains(line, "[not built]") {
-			t.Errorf("artefact with imageURL should use hyperlink, not plain '❌ not built'; got line:\n%s", line)
+		if strings.Contains(line, serverRow) && !strings.Contains(line, wantLink) {
+			t.Errorf("server artefact row should contain log link %q; got line:\n%s", wantLink, line)
+		}
+		if strings.Contains(line, desktopRow) && !strings.HasSuffix(strings.TrimSpace(line), "| ❌ |") {
+			t.Errorf("desktop artefact row (no imageURL) should end with '| ❌ |'; got line:\n%s", line)
 		}
 	}
 }

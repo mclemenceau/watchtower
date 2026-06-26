@@ -163,11 +163,11 @@ func handleBuildsStatusRelease(artefacts []buildapi.Artefact, release, product s
 		fmt.Fprintf(&sb, "**Build Status** · %s · %s\n\n",
 			release, time.Now().UTC().Format("2006-01-02 15:04 UTC"))
 	}
-	sb.WriteString("| Artefact | Product | Version | Age | Build |\n")
-	sb.WriteString("|----------|---------|---------|-----|-------|\n")
+	sb.WriteString("| Artefact | Product | Version | Age | Build | Log |\n")
+	sb.WriteString("|----------|---------|---------|-----|-------|-----|\n")
 	for _, art := range filtered {
-		fmt.Fprintf(&sb, "| %s | %s | %s | %s | %s |\n",
-			art.Name, art.OS, art.Version, buildapi.ImageAge(art.Version), buildapi.BuildStatus(art.Version, art.ImageURL))
+		fmt.Fprintf(&sb, "| %s | %s | %s | %s | %s | %s |\n",
+			art.Name, art.OS, art.Version, buildapi.ImageAge(art.Version), buildapi.BuildStatus(art.Version), buildapi.LogCell(art.ImageURL))
 	}
 	return hook.Send(sb.String())
 }

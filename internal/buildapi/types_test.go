@@ -1,7 +1,6 @@
 package buildapi
 
 import (
-	"strings"
 	"testing"
 	"time"
 )
@@ -58,38 +57,38 @@ func TestLogURLFromImageURL_InvalidDate(t *testing.T) {
 
 func TestBuildStatus_BuiltToday(t *testing.T) {
 	version := time.Now().UTC().Format("20060102")
-	got := BuildStatus(version, "")
-	if got != "✅ built" {
-		t.Errorf("BuildStatus(today, %q) = %q, want %q", "", got, "✅ built")
+	got := BuildStatus(version)
+	if got != "✅" {
+		t.Errorf("BuildStatus(today) = %q, want %q", got, "✅")
 	}
 }
 
-func TestBuildStatus_NotBuiltNoURL(t *testing.T) {
-	// Old version, no imageURL → plain fallback
-	got := BuildStatus("20200101", "")
-	if got != "❌ not built" {
-		t.Errorf("BuildStatus(old, %q) = %q, want %q", "", got, "❌ not built")
+func TestBuildStatus_NotBuilt(t *testing.T) {
+	got := BuildStatus("20200101")
+	if got != "❌" {
+		t.Errorf("BuildStatus(old) = %q, want %q", got, "❌")
 	}
 }
 
-func TestBuildStatus_NotBuiltWithURL(t *testing.T) {
-	// Old version + valid imageURL → Markdown hyperlink
+// --- LogCell ---
+
+func TestLogCell_WithURL(t *testing.T) {
 	imageURL := "https://cdimage.ubuntu.com/ubuntu-server/stonking/daily-live/20260415/stonking-live-server-amd64.iso"
 	logURL := "https://ubuntu-archive-team.ubuntu.com/cd-build-logs/ubuntu-server/stonking/daily-live-20260415.log"
-	got := BuildStatus("20200101", imageURL)
-	want := "❌ [not built](" + logURL + ")"
-	if got != want {
-		t.Errorf("BuildStatus(old, imageURL)\n got  %q\n want %q", got, want)
-	}
-	if !strings.HasPrefix(got, "❌") {
-		t.Errorf("BuildStatus should start with ❌, got %q", got)
+	want := "[🔗](" + logURL + ")"
+	if got := LogCell(imageURL); got != want {
+		t.Errorf("LogCell(%q)\n got  %q\n want %q", imageURL, got, want)
 	}
 }
 
-func TestBuildStatus_NotBuiltMalformedURL(t *testing.T) {
-	// Malformed imageURL → graceful fallback to plain "not built"
-	got := BuildStatus("20200101", "https://not-cdimage.example.com/bad/path")
-	if got != "❌ not built" {
-		t.Errorf("BuildStatus with malformed imageURL = %q, want %q", got, "❌ not built")
+func TestLogCell_NoURL(t *testing.T) {
+	if got := LogCell(""); got != "❌" {
+		t.Errorf("LogCell(%q) = %q, want %q", "", got, "❌")
+	}
+}
+
+func TestLogCell_MalformedURL(t *testing.T) {
+	if got := LogCell("https://not-cdimage.example.com/bad/path"); got != "❌" {
+		t.Errorf("LogCell(malformed) = %q, want %q", got, "❌")
 	}
 }

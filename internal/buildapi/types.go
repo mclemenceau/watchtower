@@ -75,17 +75,22 @@ func IsBuiltToday(version string) bool {
 	return base == time.Now().UTC().Format("20060102")
 }
 
-// BuildStatus returns a display string reflecting whether the image was built today.
-// When the image was not built today and imageURL is a recognised cdimage.ubuntu.com
-// URL, the "not built" label is wrapped in a Markdown hyperlink to the build log.
-func BuildStatus(version, imageURL string) string {
+// BuildStatus returns an emoji reflecting whether the image was built today.
+// ✅ means built today; ❌ means not built. Log URL is handled separately via LogURLFromImageURL.
+func BuildStatus(version string) string {
 	if IsBuiltToday(version) {
-		return "✅ built"
+		return "✅"
 	}
+	return "❌"
+}
+
+// LogCell returns a Markdown 🔗 hyperlink to the build log when imageURL is a
+// recognised cdimage.ubuntu.com URL, or ❌ when no log URL can be derived.
+func LogCell(imageURL string) string {
 	if logURL := LogURLFromImageURL(imageURL); logURL != "" {
-		return fmt.Sprintf("❌ [not built](%s)", logURL)
+		return fmt.Sprintf("[🔗](%s)", logURL)
 	}
-	return "❌ not built"
+	return "❌"
 }
 
 // LogURLFromImageURL derives the cd-build-log URL from a cdimage.ubuntu.com image URL.

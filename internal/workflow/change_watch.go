@@ -100,11 +100,11 @@ func formatChangeReport(r buildapi.ChangeReport) string {
 
 	if len(r.NewArtefacts) > 0 {
 		sb.WriteString("🆕 **New Artefacts**\n\n")
-		sb.WriteString("| Release | Product | Artefact | Version | Age | Build |\n")
-		sb.WriteString("|---------|---------|----------|---------|-----|-------|\n")
+		sb.WriteString("| Release | Product | Artefact | Version | Age | Build | Log |\n")
+		sb.WriteString("|---------|---------|----------|---------|-----|-------|-----|\n")
 		for _, n := range r.NewArtefacts {
-			fmt.Fprintf(&sb, "| %s | %s | %s | %s | %s | %s |\n",
-				n.Release, n.OS, n.Name, n.Version, buildapi.ImageAge(n.Version), buildapi.BuildStatus(n.Version, n.ImageURL))
+			fmt.Fprintf(&sb, "| %s | %s | %s | %s | %s | %s | %s |\n",
+				n.Release, n.OS, n.Name, n.Version, buildapi.ImageAge(n.Version), buildapi.BuildStatus(n.Version), buildapi.LogCell(n.ImageURL))
 		}
 	}
 

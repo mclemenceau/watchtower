@@ -90,11 +90,11 @@ func (a *Activities) FormatStatusTable(_ context.Context, artefacts []buildapi.A
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "**Build Status — %s** · %s\n\n",
 		release, time.Now().UTC().Format("2006-01-02 15:04 UTC"))
-	sb.WriteString("| Name | Product | Release | Age | Status |\n")
-	sb.WriteString("|------|---------|---------|-----|--------|\n")
+	sb.WriteString("| Name | Product | Release | Age | Status | Log |\n")
+	sb.WriteString("|------|---------|---------|-----|--------|-----|\n")
 	for _, art := range filtered {
-		fmt.Fprintf(&sb, "| %s | %s | %s | %s | %s |\n",
-			art.Name, art.OS, art.Release, buildapi.ImageAge(art.Version), buildapi.BuildStatus(art.Version, art.ImageURL))
+		fmt.Fprintf(&sb, "| %s | %s | %s | %s | %s | %s |\n",
+			art.Name, art.OS, art.Release, buildapi.ImageAge(art.Version), buildapi.BuildStatus(art.Version), buildapi.LogCell(art.ImageURL))
 	}
 	return sb.String(), nil
 }
