@@ -82,7 +82,7 @@ func loadDotEnv(path string) error {
 		}
 		return fmt.Errorf("config: open %s: %w", path, err)
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck
 
 	scanner := bufio.NewScanner(f)
 	lineNum := 0

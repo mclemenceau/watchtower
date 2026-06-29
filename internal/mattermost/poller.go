@@ -133,7 +133,7 @@ func fetchNewPosts(ctx context.Context, client *http.Client, cfg PollerConfig, s
 	if err != nil {
 		return nil, sinceMs, fmt.Errorf("fetchNewPosts: http: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))

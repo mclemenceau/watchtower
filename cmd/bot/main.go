@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -33,7 +34,7 @@ func main() {
 	cfg, err := config.Load()
 	if err != nil {
 		// Always print fatal config errors regardless of verbosity.
-		os.Stderr.WriteString("config: " + err.Error() + "\n")
+		fmt.Fprintf(os.Stderr, "config: %s\n", err.Error())
 		os.Exit(1)
 	}
 
@@ -56,7 +57,7 @@ func main() {
 		Logger:   temporalLogger,
 	})
 	if err != nil {
-		os.Stderr.WriteString("bot: dial temporal: " + err.Error() + "\n")
+		fmt.Fprintf(os.Stderr, "bot: dial temporal: %s\n", err.Error())
 		os.Exit(1)
 	}
 	defer c.Close()

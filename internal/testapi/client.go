@@ -40,7 +40,7 @@ func (c *HTTPTestClient) FetchBuilds(ctx context.Context, artefactID int) ([]bui
 	if err != nil {
 		return nil, fmt.Errorf("FetchBuilds: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("FetchBuilds: unexpected status %d", resp.StatusCode)
