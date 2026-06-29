@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mclemenceau/argus/internal/state"
+	"github.com/mclemenceau/watchtower/internal/state"
 )
 
 // PollerConfig holds the parameters needed to poll a Mattermost channel.

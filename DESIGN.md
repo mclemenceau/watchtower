@@ -1,9 +1,9 @@
-# ARGUS — Design Reference
+# Watchtower — Design Reference
 
 ## What this is
 
 An AI-powered release monitoring agent for Ubuntu image build pipelines.
-ARGUS runs two concurrent modes:
+Watchtower runs two concurrent modes:
 
 **Proactive (Temporal cron workflow — no human trigger):**
 - Every 10 min: fetch artefacts → diff against local snapshot → post change report to Mattermost if anything changed
@@ -90,7 +90,7 @@ type ArtefactDelta struct {
 An artefact's presence in Test Observer is the signal that a build succeeded:
 
 - **Present with today's version** (`YYYYMMDD` or `YYYYMMDD.N`) — build completed; image is available for testing.
-- **Present with an older version** — today's build has not landed yet. The cause is indistinguishable from ARGUS's perspective: the build may not have started, may be in progress, or may have failed at the pipeline level before reaching Test Observer.
+- **Present with an older version** — today's build has not landed yet. The cause is indistinguishable from Watchtower's perspective: the build may not have started, may be in progress, or may have failed at the pipeline level before reaching Test Observer.
 - **Absent entirely** — the artefact has never been seen, or is no longer tracked by Test Observer.
 
 The `Status` field (`APPROVED` / `UNDECIDED` / `MARKED_AS_FAILED`) is the **test review state** set by humans after testing. It is orthogonal to build availability and is not used in the status table.
@@ -131,23 +131,23 @@ Run `make run-bot` (no Mattermost credentials needed):
 
 ```
 $ make run-bot
-[ARGUS] Bot started. Type a message (Ctrl-D to quit):
+[Watchtower] Bot started. Type a message (Ctrl-D to quit):
 you> help
-[ARGUS →]
-**ARGUS — available commands:** ...
+[Watchtower →]
+**Watchtower — available commands:** ...
 
 you> status
-[ARGUS →]
+[Watchtower →]
 **Build Status — plucky** · 2026-06-24 14:00 UTC
 ...
 
 you> builds noble
-[ARGUS →]
+[Watchtower →]
 **Builds for noble** (2 artefacts) ...
 ```
 
 Proactive change reports from the cron workflow print inline with the same
-`[ARGUS →]` prefix.
+`[Watchtower →]` prefix.
 
 When `MATTERMOST_WEBHOOK_URL` is set, `StdoutWebhookClient` is replaced by
 `HTTPWebhookClient` with no other code changes.

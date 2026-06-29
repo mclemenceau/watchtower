@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mclemenceau/argus/internal/buildapi"
-	"github.com/mclemenceau/argus/internal/testapi"
+	"github.com/mclemenceau/watchtower/internal/buildapi"
+	"github.com/mclemenceau/watchtower/internal/testapi"
 )
 
 // Dispatch routes an incoming message to the appropriate handler and sends the
@@ -346,7 +346,7 @@ func handleTestsStatusRelease(artefacts []buildapi.Artefact, release, product st
 }
 
 func helpText() string {
-	return `**ARGUS — available commands:**
+	return `**Watchtower — available commands:**
 
 | Command | Description |
 |---------|-------------|

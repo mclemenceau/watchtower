@@ -7,11 +7,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mclemenceau/argus/internal/buildapi"
-	"github.com/mclemenceau/argus/internal/llm"
-	"github.com/mclemenceau/argus/internal/mattermost"
-	"github.com/mclemenceau/argus/internal/state"
-	"github.com/mclemenceau/argus/internal/testapi"
+	"github.com/mclemenceau/watchtower/internal/buildapi"
+	"github.com/mclemenceau/watchtower/internal/llm"
+	"github.com/mclemenceau/watchtower/internal/mattermost"
+	"github.com/mclemenceau/watchtower/internal/state"
+	"github.com/mclemenceau/watchtower/internal/testapi"
 )
 
 // Activities holds the dependencies injected at worker startup.

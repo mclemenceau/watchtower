@@ -1,6 +1,6 @@
 package testapi
 
-import "github.com/mclemenceau/argus/internal/buildapi"
+import "github.com/mclemenceau/watchtower/internal/buildapi"
 
 // IsDisplayable returns true when the execution represents a real test result
 // worth surfacing to the user. Filtering rules:

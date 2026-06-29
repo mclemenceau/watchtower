@@ -7,8 +7,8 @@ import (
 	"io"
 	"strings"
 
-	"github.com/mclemenceau/argus/internal/buildapi"
-	"github.com/mclemenceau/argus/internal/state"
+	"github.com/mclemenceau/watchtower/internal/buildapi"
+	"github.com/mclemenceau/watchtower/internal/state"
 )
 
 // SnapshotReader is a function that returns the current artefact snapshot.
@@ -21,7 +21,7 @@ type SnapshotReader func() ([]buildapi.Artefact, error)
 // auto-detect from snapshot). keyword is the optional trigger prefix (e.g.
 // "@watchtower"); pass empty string to dispatch every line regardless of prefix.
 func RunREPL(ctx context.Context, in io.Reader, hook WebhookClient, snap *state.Snapshot, defaultRelease string, keyword string) {
-	fmt.Println("[ARGUS] Bot started. Type a message (Ctrl-D to quit):")
+	fmt.Println("[Watchtower] Bot started. Type a message (Ctrl-D to quit):")
 	fmt.Print("you> ")
 
 	scanner := bufio.NewScanner(in)
@@ -29,13 +29,13 @@ func RunREPL(ctx context.Context, in io.Reader, hook WebhookClient, snap *state.
 		// Check context before blocking on next line.
 		select {
 		case <-ctx.Done():
-			fmt.Println("\n[ARGUS] Shutting down.")
+			fmt.Println("\n[Watchtower] Shutting down.")
 			return
 		default:
 		}
 
 		if !scanner.Scan() {
-			fmt.Println("\n[ARGUS] Shutting down.")
+			fmt.Println("\n[Watchtower] Shutting down.")
 			return
 		}
 
@@ -47,13 +47,13 @@ func RunREPL(ctx context.Context, in io.Reader, hook WebhookClient, snap *state.
 
 		artefacts, err := snap.Read()
 		if err != nil {
-			fmt.Printf("[ARGUS] error reading snapshot: %v\n", err)
+			fmt.Printf("[Watchtower] error reading snapshot: %v\n", err)
 			fmt.Print("you> ")
 			continue
 		}
 
 		if dispatchErr := Dispatch(line, artefacts, defaultRelease, hook, keyword); dispatchErr != nil {
-			fmt.Printf("[ARGUS] error: %v\n", dispatchErr)
+			fmt.Printf("[Watchtower] error: %v\n", dispatchErr)
 		}
 
 		fmt.Print("you> ")

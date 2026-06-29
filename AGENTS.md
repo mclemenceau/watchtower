@@ -1,6 +1,6 @@
-# ARGUS — Agent Release Graduate for Ubuntu Systems
+# Watchtower — Ubuntu Image Build Pipeline Monitor
 
-ARGUS monitors Ubuntu image build pipelines via proactive Temporal cron workflows
+Watchtower monitors Ubuntu image build pipelines via proactive Temporal cron workflows
 and a reactive Mattermost bot. See [DESIGN.md](DESIGN.md) for architecture, data types,
 and demo flows.
 

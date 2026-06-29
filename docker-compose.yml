@@ -47,7 +47,7 @@ services:
       temporal:
         condition: service_healthy
 
-  # ── ARGUS bot (Temporal worker + Mattermost REPL) ─────────────────────────
+  # ── Watchtower bot (Temporal worker + Mattermost REPL) ───────────────────
   bot:
     build:
       context: .

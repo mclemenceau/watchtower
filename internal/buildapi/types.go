@@ -9,7 +9,7 @@ import (
 const baseLogURL = "https://ubuntu-archive-team.ubuntu.com/cd-build-logs"
 
 // Artefact mirrors the Test Observer API ArtefactResponse for the image family.
-// Only fields used by ARGUS are included; extra API fields are silently discarded.
+// Only fields used by Watchtower are included; extra API fields are silently discarded.
 // Builds is populated by the cron workflow and cached in the snapshot; it is
 // omitted from JSON when empty so existing snapshot files remain compatible.
 type Artefact struct {

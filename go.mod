@@ -1,4 +1,4 @@
-module github.com/mclemenceau/argus
+module github.com/mclemenceau/watchtower
 
 go 1.26.2
 

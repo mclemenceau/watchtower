@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/mclemenceau/argus/internal/buildapi"
+	"github.com/mclemenceau/watchtower/internal/buildapi"
 )
 
 // TestClient fetches test execution data from the Test Observer API.

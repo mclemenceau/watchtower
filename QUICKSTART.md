@@ -1,4 +1,4 @@
-# ARGUS — Local Dev Quickstart
+# Watchtower — Local Dev Quickstart
 
 ## Prerequisites
 
@@ -29,11 +29,11 @@ http://localhost:8233.
 make run-bot
 ```
 
-ARGUS boots, fetches a fresh snapshot from the Test Observer API, and drops
+Watchtower boots, fetches a fresh snapshot from the Test Observer API, and drops
 you into the REPL:
 
 ```
-[ARGUS] Bot started. Type a message (Ctrl-D to quit):
+[Watchtower] Bot started. Type a message (Ctrl-D to quit):
 you>
 ```
 
@@ -49,7 +49,7 @@ you> tests status plucky
 
 The proactive cron workflow runs every 10 minutes in the background. If the
 pipeline state changes, a change report prints inline with the same
-`[ARGUS →]` prefix.
+`[Watchtower →]` prefix.
 
 ### Restarting after a code change
 
@@ -85,7 +85,7 @@ MATTERMOST_CHANNEL_ID=channel-id-to-monitor
 MATTERMOST_KEYWORD=@watchtower   # optional trigger keyword
 ```
 
-Without these, ARGUS prints all output to stdout inside the container.
+Without these, Watchtower prints all output to stdout inside the container.
 
 ### Step 2 — Start the stack
 
@@ -96,7 +96,7 @@ make up
 This builds and starts three containers:
 - **temporal** — Temporal server with SQLite (`temporalio/auto-setup`)
 - **temporal-ui** — Temporal Web UI at http://localhost:8233
-- **bot** — ARGUS bot (Temporal worker + Mattermost REPL)
+- **bot** — Watchtower bot (Temporal worker + Mattermost REPL)
 
 Allow ~60 seconds on first start for Temporal to complete its schema
 migrations before the bot connects.
@@ -148,7 +148,7 @@ Open the Temporal dashboard at http://localhost:8233, navigate to
 
 | Field | Value |
 |---|---|
-| Task Queue | `argus` |
+| Task Queue | `watchtower` |
 | Workflow Type | `ChangeWatchWorkflow` |
 
 This forces an immediate fetch → diff → notify cycle without waiting for the
@@ -159,12 +159,12 @@ This forces an immediate fetch → diff → notify cycle without waiting for the
 ## Connecting a real Mattermost channel
 
 1. In Mattermost, create an **Incoming Webhook** integration and copy the URL
-   into `MATTERMOST_WEBHOOK_URL`. ARGUS will post change reports there.
+   into `MATTERMOST_WEBHOOK_URL`. Watchtower will post change reports there.
 
-2. To enable the **command bot** (so the channel can query ARGUS):
+2. To enable the **command bot** (so the channel can query Watchtower):
    - Create a bot account or use a personal access token
    - Set `MATTERMOST_SERVER_URL`, `MATTERMOST_TOKEN`, `MATTERMOST_CHANNEL_ID`
-   - Optionally set `MATTERMOST_KEYWORD` (e.g. `@watchtower`) so ARGUS only
+   - Optionally set `MATTERMOST_KEYWORD` (e.g. `@watchtower`) so Watchtower only
      responds to messages that mention that keyword
 
 3. Restart the bot. The poller will begin polling the channel every 15 seconds

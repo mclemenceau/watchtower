@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/mclemenceau/argus/internal/buildapi"
-	"github.com/mclemenceau/argus/internal/llm"
+	"github.com/mclemenceau/watchtower/internal/buildapi"
+	"github.com/mclemenceau/watchtower/internal/llm"
 )
 
 func TestAnalyzeLogParsesJSON(t *testing.T) {

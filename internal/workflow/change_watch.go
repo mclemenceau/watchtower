@@ -7,9 +7,9 @@ import (
 
 	sdk "go.temporal.io/sdk/workflow"
 
-	"github.com/mclemenceau/argus/internal/activities"
-	"github.com/mclemenceau/argus/internal/buildapi"
-	"github.com/mclemenceau/argus/internal/state"
+	"github.com/mclemenceau/watchtower/internal/activities"
+	"github.com/mclemenceau/watchtower/internal/buildapi"
+	"github.com/mclemenceau/watchtower/internal/state"
 )
 
 func ChangeWatchWorkflow(ctx sdk.Context) error {

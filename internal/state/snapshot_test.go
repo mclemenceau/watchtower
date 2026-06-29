@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mclemenceau/argus/internal/buildapi"
+	"github.com/mclemenceau/watchtower/internal/buildapi"
 )
 
 func TestReadWriteRoundtrip(t *testing.T) {

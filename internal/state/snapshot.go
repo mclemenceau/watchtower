@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/mclemenceau/argus/internal/buildapi"
+	"github.com/mclemenceau/watchtower/internal/buildapi"
 )
 
 // Snapshot persists []Artefact to a JSON file with atomic writes.

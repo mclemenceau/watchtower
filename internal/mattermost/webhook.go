@@ -1,4 +1,4 @@
-// Package mattermost provides the Mattermost I/O abstraction for ARGUS.
+// Package mattermost provides the Mattermost I/O abstraction for Watchtower.
 // In production, WebhookClient sends messages to a real Mattermost incoming webhook.
 // In simulation mode (no MATTERMOST_WEBHOOK_URL), StdoutWebhookClient prints to stdout.
 package mattermost
@@ -19,11 +19,11 @@ type WebhookClient interface {
 }
 
 // StdoutWebhookClient writes messages to stdout — simulates a Mattermost channel.
-// Each message is prefixed with "[ARGUS →]" to distinguish agent output from user input.
+// Each message is prefixed with "[Watchtower →]" to distinguish agent output from user input.
 type StdoutWebhookClient struct{}
 
 func (s *StdoutWebhookClient) Send(text string) error {
-	fmt.Printf("\n[ARGUS →]\n%s\n", text)
+	fmt.Printf("\n[Watchtower →]\n%s\n", text)
 	return nil
 }
 

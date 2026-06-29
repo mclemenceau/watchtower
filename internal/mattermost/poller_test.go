@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mclemenceau/argus/internal/buildapi"
-	"github.com/mclemenceau/argus/internal/state"
+	"github.com/mclemenceau/watchtower/internal/buildapi"
+	"github.com/mclemenceau/watchtower/internal/state"
 )
 
 // --- Dispatch keyword filtering ---

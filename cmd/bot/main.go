@@ -11,16 +11,16 @@ import (
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/worker"
 
-	"github.com/mclemenceau/argus/internal/activities"
-	"github.com/mclemenceau/argus/internal/buildapi"
-	"github.com/mclemenceau/argus/internal/config"
-	"github.com/mclemenceau/argus/internal/mattermost"
-	"github.com/mclemenceau/argus/internal/state"
-	"github.com/mclemenceau/argus/internal/testapi"
-	argusworkflow "github.com/mclemenceau/argus/internal/workflow"
+	"github.com/mclemenceau/watchtower/internal/activities"
+	"github.com/mclemenceau/watchtower/internal/buildapi"
+	"github.com/mclemenceau/watchtower/internal/config"
+	"github.com/mclemenceau/watchtower/internal/mattermost"
+	"github.com/mclemenceau/watchtower/internal/state"
+	"github.com/mclemenceau/watchtower/internal/testapi"
+	watchtowerworkflow "github.com/mclemenceau/watchtower/internal/workflow"
 )
 
-const taskQueue = "argus"
+const taskQueue = "watchtower"
 
 func main() {
 	verbose := flag.Bool("v", false, "enable verbose logging")
@@ -74,7 +74,7 @@ func main() {
 	w := worker.New(c, taskQueue, worker.Options{
 		WorkerStopTimeout: 0,
 	})
-	w.RegisterWorkflow(argusworkflow.ChangeWatchWorkflow)
+	w.RegisterWorkflow(watchtowerworkflow.ChangeWatchWorkflow)
 	w.RegisterActivity(act)
 
 	go func() {
@@ -118,7 +118,7 @@ func startCronWorkflows(c client.Client) {
 			TaskQueue:    taskQueue,
 			CronSchedule: "*/10 * * * *",
 		},
-		argusworkflow.ChangeWatchWorkflow,
+		watchtowerworkflow.ChangeWatchWorkflow,
 	)
 	if err != nil {
 		log.Printf("note: change-watch cron start: %v", err)
@@ -164,7 +164,7 @@ func triggerInitialFetch(c client.Client, snap *state.Snapshot) {
 			ID:        "change-watch-init",
 			TaskQueue: taskQueue,
 		},
-		argusworkflow.ChangeWatchWorkflow,
+		watchtowerworkflow.ChangeWatchWorkflow,
 	)
 	if err != nil {
 		log.Printf("note: initial fetch start: %v", err)

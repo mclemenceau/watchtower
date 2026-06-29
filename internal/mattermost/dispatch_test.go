@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mclemenceau/argus/internal/buildapi"
+	"github.com/mclemenceau/watchtower/internal/buildapi"
 )
 
 // captureHook records the last message sent via Send.
