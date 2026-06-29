@@ -22,7 +22,7 @@ func (a *Activities) FetchLog(ctx context.Context, logURL string) (string, error
 	if err != nil {
 		return "", fmt.Errorf("FetchLog: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("FetchLog: unexpected status %d", resp.StatusCode)

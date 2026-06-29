@@ -1,3 +1,5 @@
+version: "2"
+
 run:
   timeout: 5m
 
@@ -6,13 +8,15 @@ linters:
     - errcheck
     - govet
     - staticcheck
-    - gosimple
     - unused
-    - gofmt
-    - goimports
     - misspell
     - gocritic
 
-linters-settings:
-  goimports:
-    local-prefixes: github.com/mclemenceau/argus
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/mclemenceau/argus

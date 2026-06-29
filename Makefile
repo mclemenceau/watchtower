@@ -1,17 +1,13 @@
-.PHONY: build clean test lint check run-worker run-server up down
+.PHONY: build clean test lint check run-bot up down restart-bot reset clean-state
 
-WORKER = bin/worker
-SERVER = bin/server
+BOT = bin/bot
 
 ## ── Local build ────────────────────────────────────────────────────────────
 
-build: $(WORKER) $(SERVER)
+build: $(BOT)
 
-$(WORKER):
-	go build -o $@ ./cmd/worker/
-
-$(SERVER):
-	go build -o $@ ./cmd/server/
+$(BOT):
+	go build -o $@ ./cmd/bot/
 
 clean:
 	rm -rf bin/
@@ -26,18 +22,34 @@ lint:
 
 check: lint test
 
-## ── Local dev (3 terminals) ────────────────────────────────────────────────
+## ── Local dev (Option B — 2 terminals, recommended for active development) ──
+##
+##   terminal 1:  temporal server start-dev
+##   terminal 2:  make run-bot
+##
+## To restart after a code change: Ctrl-C in terminal 2, then make run-bot again.
 
-run-worker:
-	go run ./cmd/worker/
+run-bot:
+	go run ./cmd/bot/
 
-run-server:
-	go run ./cmd/server/
+clean-state:
+	rm -f state/snapshot.json
 
-## ── Docker Compose ─────────────────────────────────────────────────────────
+## ── Docker Compose (Option A — demo / staging) ─────────────────────────────
 
 up:
 	docker compose up --build -d
 
 down:
 	docker compose down
+
+## Rebuild + restart only the bot container (Temporal/Postgres keep running).
+## Use this after a code change when running Option A.
+restart-bot:
+	docker compose up --build -d bot
+
+## Full reset: stop everything, wipe all volumes (Temporal state + snapshot),
+## then bring the whole stack back up from scratch.
+reset:
+	docker compose down -v
+	docker compose up --build -d

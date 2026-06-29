@@ -76,7 +76,7 @@ func (c *OpenRouterClient) Complete(ctx context.Context, system, prompt string) 
 	if err != nil {
 		return "", fmt.Errorf("Complete: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
