@@ -1,82 +1,78 @@
 # ARGUS — Agent Release Graduate for Ubuntu Systems
 
-An AI-powered monitoring agent for Ubuntu image build pipelines. ARGUS watches
-build status across all active releases, surfaces changes automatically, and
-answers natural-language questions about the pipeline state.
+An automated watchtower for Ubuntu image build pipelines. ARGUS monitors build
+and test status across all active releases, posts change alerts to Mattermost
+automatically, and answers status queries on demand via channel commands.
 
 ---
 
 ## What it does
 
 **Proactive monitoring** — without any human input, ARGUS:
-- Checks for pipeline changes every 10 minutes and posts a change report to the chat when something shifts
-- Publishes a full build status table every 6 hours
+- Checks for pipeline changes every 10 minutes and posts a change report to
+  the Mattermost channel whenever a failure, recovery, or new artefact appears
 
-**Reactive Q&A** — ask anything in plain English:
-- *"What's the current status of all noble builds?"*
-- *"Are there any active failures right now?"*
-- *"Why did ubuntu-server-amd64 fail?"*
+**Reactive Q&A** — type commands in the Mattermost channel (or the local REPL):
+- `builds status` — build availability table for the latest active release
+- `builds status <release>` — builds for a specific release (e.g. `noble`)
+- `builds status <release> <product>` — filter by product name
+- `tests status` — test execution results for the latest release
+- `tests status <release>` — test results for a specific release
+- `help` — list all available commands
 
-The LLM receives the full live snapshot and produces a direct, formatted answer —
-a prose summary for single-image queries, a sorted markdown table for overviews.
+> **Coming soon:** Natural-language log analysis via LLM — ask *"Why did
+> ubuntu-server-amd64 fail?"* and get a root-cause summary from the build log.
 
 ---
 
 ## Quick start
 
-**Prerequisites:** Docker + Docker Compose, an [OpenRouter](https://openrouter.ai) API key.
+**No API keys required** for local development.
 
 ```bash
-cp .env.example .env          # add your OPENROUTER_API_KEY
-make up                       # build images and start the stack
+# Option B — recommended for development (2 terminals)
+temporal server start-dev          # terminal 1
+make run-bot                       # terminal 2 — type commands at the you> prompt
+```
+
+```bash
+# Option A — Docker Compose (demo / staging)
+cp .env.example .env               # no required vars; optionally set MATTERMOST_WEBHOOK_URL
+make up                            # build images and start the stack
 ```
 
 | URL | What |
 |-----|------|
-| http://localhost:8080 | ARGUS chat UI |
 | http://localhost:8233 | Temporal workflow dashboard |
 
-Allow ~60 seconds on first start for Temporal to complete its schema migrations.
-See [QUICKSTART.md](QUICKSTART.md) for full details including how to manually trigger workflows.
-
-```bash
-make down                     # stop (state is preserved across restarts)
-```
+See [QUICKSTART.md](QUICKSTART.md) for full setup details.
 
 ---
 
 ## Architecture
 
 ```
-                    ┌─────────────────────────────────┐
-                    │         Temporal Worker          │
-                    │                                  │
-                    │  ChangeWatchWorkflow (10 min)    │
-                    │    └─ diff snapshot → feed push  │
-                    │                                  │
-                    │  StatusTableWorkflow (6 h)       │
-                    │    └─ full table → feed push     │
-                    │                                  │
-                    │  QueryWorkflow (on demand)       │
-                    │    └─ snapshot + query → LLM     │
-                    └──────────────┬──────────────────┘
-                                   │ /internal/push
-                    ┌──────────────▼──────────────────┐
-                    │         Gin HTTP Server          │
-                    │  POST /query  GET /feed (SSE)    │
-                    └──────────────┬──────────────────┘
-                                   │
-                    ┌──────────────▼──────────────────┐
-                    │           Web UI                 │
-                    │  Single-page chat — pipeline     │
-                    │  updates + Q&A in one thread     │
-                    └─────────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│  cmd/bot  (single binary)                               │
+│                                                         │
+│  ┌──────────────────────┐   ┌───────────────────────┐  │
+│  │   Temporal Worker    │   │  Mattermost Interface │  │
+│  │                      │   │                       │  │
+│  │  ChangeWatchWorkflow │   │  REPL  (local dev)    │  │
+│  │  (every 10 min)      │──▶│  Poller (REST API)    │  │
+│  │  fetch → diff        │   │  Webhook (outbound)   │  │
+│  │  → notify if changed │   │                       │  │
+│  └──────────────────────┘   └───────────┬───────────┘  │
+└───────────────────────────────────────── │ ────────────┘
+                                           │ keyword dispatch
+                                           ▼
+                                  state/snapshot.json
+                                  (atomic writes, no DB)
 ```
 
-The worker maintains a local `state/snapshot.json` updated by every
-`ChangeWatchWorkflow` run. Query workflows read that snapshot (a fast local
-file read) and pass the full artefact table to the LLM in a single call,
-so queries are fast and the model has complete context.
+The cron workflow maintains a local snapshot. The Mattermost interface (REPL
+or channel poller) reads from that snapshot to answer commands instantly —
+no API call needed per query.
 
 ---
 
@@ -86,26 +82,29 @@ so queries are fast and the model has complete context.
 |-----------|------------|
 | Language | Go 1.21+ |
 | Workflow orchestration | [Temporal](https://temporal.io) |
-| LLM | [OpenRouter](https://openrouter.ai) (configurable model) |
 | Pipeline data | [Ubuntu Test Observer API](https://tests-api.ubuntu.com) |
-| Web server | [Gin](https://github.com/gin-gonic/gin) |
-| UI | Vanilla HTML/JS + [Vanilla Framework](https://vanillaframework.io) |
+| Mattermost I/O | Incoming webhooks (real) / stdout simulation (dev) |
+| LLM (upcoming) | [OpenRouter](https://openrouter.ai) — log root-cause analysis |
 | State | Atomic JSON file — no database |
 
 ---
 
 ## Configuration
 
-Copy `.env.example` to `.env` and set your key:
+Copy `.env.example` to `.env`. All variables are optional for local development.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `OPENROUTER_API_KEY` | — | **Required.** OpenRouter API key |
-| `LLM_MODEL` | `anthropic/claude-sonnet-4-5` | Any model available on OpenRouter |
-| `DEFAULT_RELEASE` | auto-detect | Pin the status table to a specific Ubuntu release |
+| `MATTERMOST_WEBHOOK_URL` | — | Incoming webhook URL — omit to use stdout simulation |
+| `MATTERMOST_SERVER_URL` | — | Server URL for channel poller (e.g. `https://chat.example.com`) |
+| `MATTERMOST_TOKEN` | — | Personal access token for the poller |
+| `MATTERMOST_CHANNEL_ID` | — | Channel ID to poll for incoming commands |
+| `MATTERMOST_KEYWORD` | — | Optional trigger keyword (e.g. `@watchtower`) |
+| `DEFAULT_RELEASE` | auto-detect | Pin status tables to a specific Ubuntu release |
 | `TEST_OBSERVER_URL` | `https://tests-api.ubuntu.com` | Pipeline data source |
-| `PORT` | `8080` | HTTP server port |
 | `TEMPORAL_HOST` | `localhost:7233` | Temporal server address |
+| `OPENROUTER_API_KEY` | — | (upcoming) OpenRouter key for log analysis |
+| `LLM_MODEL` | — | (upcoming) Model slug, e.g. `anthropic/claude-sonnet-4-5` |
 
 ---
 
@@ -113,17 +112,17 @@ Copy `.env.example` to `.env` and set your key:
 
 ```
 cmd/
-  server/     Gin HTTP gateway  (/query, /feed SSE, static UI)
-  worker/     Temporal worker entrypoint + cron registration
+  bot/            Single entrypoint: Temporal worker + Mattermost REPL + poller
 internal/
-  workflow/   ChangeWatchWorkflow, StatusTableWorkflow, QueryWorkflow
-  activities/ FetchBuildStatus, FormatStatusTable, AnswerQuery, AnalyzeLog, …
-  buildapi/   ArtefactClient interface + HTTP implementation
-  llm/        LLMClient interface + OpenRouter implementation
-  state/      Atomic snapshot read/write and diff logic
-  config/     Environment variable loading
-web/
-  index.html  Single-page chat UI
+  workflow/       ChangeWatchWorkflow (10-min cron)
+  activities/     FetchBuildStatus, FetchTestExecutions, FormatStatusTable,
+                  NotifyChannel, FetchLog, AnalyzeLog (LLM — upcoming)
+  mattermost/     WebhookClient, keyword dispatch, REPL, channel poller
+  buildapi/       ArtefactClient interface + HTTP implementation
+  testapi/        TestClient interface + HTTP implementation
+  llm/            LLMClient interface + OpenRouter implementation (upcoming)
+  state/          Atomic snapshot read/write and diff logic
+  config/         Environment variable loading
 ```
 
 ---
@@ -131,11 +130,11 @@ web/
 ## Development
 
 ```bash
-make build    # compile worker + server into bin/
+make build    # compile bot binary into bin/
 make test     # go test -race -count=1 ./...
 make lint     # golangci-lint run ./...
 make check    # lint + test (pre-commit gate)
 ```
 
-See [CLAUDE.md](CLAUDE.md) for conventions and [DESIGN.md](DESIGN.md) for
-architecture details.
+See [QUICKSTART.md](QUICKSTART.md) for running locally and [DESIGN.md](DESIGN.md)
+for architecture details and data types.
