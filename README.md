@@ -1,6 +1,6 @@
-# ARGUS — Agent Release Graduate for Ubuntu Systems
+# Automated Watchtower Agent
 
-An automated watchtower for Ubuntu image build pipelines. ARGUS monitors build
+An automated watchtower for Ubuntu image build pipelines monitors build
 and test status across all active releases, posts change alerts to Mattermost
 automatically, and answers status queries on demand via channel commands.
 
@@ -8,7 +8,7 @@ automatically, and answers status queries on demand via channel commands.
 
 ## What it does
 
-**Proactive monitoring** — without any human input, ARGUS:
+**Proactive monitoring** — without any human input:
 - Checks for pipeline changes every 10 minutes and posts a change report to
   the Mattermost channel whenever a failure, recovery, or new artefact appears
 
