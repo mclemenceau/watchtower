@@ -24,6 +24,9 @@ type Config struct {
 	// LLM-assisted intent resolution (optional — feature is disabled when OpenRouterAPIKey is empty)
 	OpenRouterAPIKey string
 	LLMModel         string
+
+	// Cron schedule for the change-watch workflow (standard cron syntax, default every 10 min)
+	CronSchedule string
 }
 
 func Load() (*Config, error) {
@@ -49,6 +52,7 @@ func Load() (*Config, error) {
 		WatchtowerKeyword:      envOrDefault("WATCHTOWER_KEYWORD", "@watchtower"),
 		OpenRouterAPIKey:       os.Getenv("OPENROUTER_API_KEY"),
 		LLMModel:               envOrDefault("LLM_MODEL", "openai/gpt-4o-mini"),
+		CronSchedule:           envOrDefault("WATCHTOWER_CRON_SCHEDULE", "*/10 * * * *"),
 	}, nil
 }
 

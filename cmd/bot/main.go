@@ -98,7 +98,7 @@ func main() {
 	terminateStaleWorkflows(c, "status-table", "query")
 
 	// Start cron workflow (idempotent — Temporal ignores if already running).
-	startCronWorkflows(c)
+	startCronWorkflows(c, cfg.CronSchedule)
 
 	// If the snapshot is empty (first boot), trigger an immediate fetch so
 	// commands work right away without waiting up to 10 min for the cron.
@@ -121,20 +121,20 @@ func main() {
 	mattermost.RunREPL(context.Background(), os.Stdin, hook, snap, cfg.DefaultRelease, cfg.WatchtowerKeyword, resolver)
 }
 
-func startCronWorkflows(c client.Client) {
+func startCronWorkflows(c client.Client, cronSchedule string) {
 	_, err := c.ExecuteWorkflow(
 		context.Background(),
 		client.StartWorkflowOptions{
 			ID:           "change-watch",
 			TaskQueue:    taskQueue,
-			CronSchedule: "*/10 * * * *",
+			CronSchedule: cronSchedule,
 		},
 		watchtowerworkflow.ChangeWatchWorkflow,
 	)
 	if err != nil {
 		log.Printf("note: change-watch cron start: %v", err)
 	} else {
-		log.Print("change-watch cron scheduled (every 10 min)")
+		log.Printf("change-watch cron scheduled (%s)", cronSchedule)
 	}
 }
 
