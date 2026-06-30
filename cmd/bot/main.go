@@ -14,6 +14,8 @@ import (
 	"github.com/mclemenceau/watchtower/internal/activities"
 	"github.com/mclemenceau/watchtower/internal/buildapi"
 	"github.com/mclemenceau/watchtower/internal/config"
+	"github.com/mclemenceau/watchtower/internal/intent"
+	"github.com/mclemenceau/watchtower/internal/llm"
 	"github.com/mclemenceau/watchtower/internal/mattermost"
 	"github.com/mclemenceau/watchtower/internal/state"
 	"github.com/mclemenceau/watchtower/internal/testapi"
@@ -49,6 +51,15 @@ func main() {
 	}
 
 	snap := state.New("state/snapshot.json")
+
+	// Build optional LLM-backed intent resolver (disabled when API key is absent).
+	var resolver *intent.Resolver
+	if cfg.OpenRouterAPIKey != "" {
+		resolver = intent.New(llm.NewOpenRouterClient(cfg.OpenRouterAPIKey, cfg.LLMModel))
+		log.Printf("intent resolver: enabled (model: %s)", cfg.LLMModel)
+	} else {
+		log.Print("intent resolver: disabled (set OPENROUTER_API_KEY to enable)")
+	}
 
 	// Connect to Temporal. Pass a no-op logger to suppress SDK output.
 	temporalLogger := newTemporalLogger(*verbose)
@@ -104,10 +115,10 @@ func main() {
 		ChannelID: cfg.MattermostChannelID,
 		Interval:  cfg.MattermostPollInterval,
 		Keyword:   cfg.WatchtowerKeyword,
-	}, snap, cfg.DefaultRelease, hook, nil)
+	}, snap, cfg.DefaultRelease, hook, nil, resolver)
 
 	// Run the interactive REPL — blocks until stdin is closed or Ctrl-D.
-	mattermost.RunREPL(context.Background(), os.Stdin, hook, snap, cfg.DefaultRelease, cfg.WatchtowerKeyword)
+	mattermost.RunREPL(context.Background(), os.Stdin, hook, snap, cfg.DefaultRelease, cfg.WatchtowerKeyword, resolver)
 }
 
 func startCronWorkflows(c client.Client) {

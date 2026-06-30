@@ -1,12 +1,14 @@
 package mattermost
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/mclemenceau/watchtower/internal/buildapi"
+	"github.com/mclemenceau/watchtower/internal/intent"
 	"github.com/mclemenceau/watchtower/internal/testapi"
 )
 
@@ -19,7 +21,14 @@ import (
 // that do NOT start with the keyword are silently ignored, and the keyword is
 // stripped before routing. Pass an empty string to disable keyword filtering
 // (every message is dispatched).
-func Dispatch(msg string, artefacts []buildapi.Artefact, defaultRelease string, hook WebhookClient, keyword string) error {
+//
+// resolver is an optional LLM-backed intent resolver. When non-nil and a message
+// does not match any keyword pattern, Dispatch delegates to the resolver to
+// interpret free-text and either re-dispatch the resolved command or ask a
+// clarifying question. sessionID identifies the conversation (e.g. "repl" or
+// a channel+user composite) for multi-turn clarification. Pass a nil resolver
+// to keep the original "I didn't understand" behaviour.
+func Dispatch(ctx context.Context, sessionID, msg string, artefacts []buildapi.Artefact, defaultRelease string, hook WebhookClient, keyword string, resolver *intent.Resolver) error {
 	msg = strings.TrimSpace(msg)
 	if msg == "" {
 		return nil
@@ -70,6 +79,18 @@ func Dispatch(msg string, artefacts []buildapi.Artefact, defaultRelease string, 
 		return hook.Send("Usage: `tests status` · `tests status <release>` · `tests status <release> <product>`")
 
 	default:
+		if resolver != nil {
+			res := resolver.Resolve(ctx, sessionID, msg)
+			switch res.Kind {
+			case intent.Dispatched:
+				// Re-dispatch with the resolved command; no further intent resolution.
+				return Dispatch(ctx, sessionID, res.Command, artefacts, defaultRelease, hook, "", nil)
+			case intent.NeedsInfo:
+				return hook.Send(res.Reply)
+			case intent.Failed:
+				return hook.Send(res.Reply)
+			}
+		}
 		return hook.Send(fmt.Sprintf("I didn't understand `%s`. Type `help` for available commands.", msg))
 	}
 }

@@ -18,7 +18,7 @@ import (
 func TestDispatchKeywordRequired(t *testing.T) {
 	hook := &captureHook{}
 	// With keyword set, a bare "help" (no keyword prefix) must be ignored.
-	if err := Dispatch("help", testArtefacts, "", hook, "@watchtower"); err != nil {
+	if err := Dispatch(context.Background(), "test", "help", testArtefacts, "", hook, "@watchtower", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if hook.last != "" {
@@ -29,7 +29,7 @@ func TestDispatchKeywordRequired(t *testing.T) {
 func TestDispatchKeywordStripped(t *testing.T) {
 	hook := &captureHook{}
 	// "@watchtower help" must route to the help handler.
-	if err := Dispatch("@watchtower help", testArtefacts, "", hook, "@watchtower"); err != nil {
+	if err := Dispatch(context.Background(), "test", "@watchtower help", testArtefacts, "", hook, "@watchtower", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "builds status") {
@@ -39,7 +39,7 @@ func TestDispatchKeywordStripped(t *testing.T) {
 
 func TestDispatchKeywordCaseInsensitive(t *testing.T) {
 	hook := &captureHook{}
-	if err := Dispatch("@Watchtower builds status", testArtefacts, "", hook, "@watchtower"); err != nil {
+	if err := Dispatch(context.Background(), "test", "@Watchtower builds status", testArtefacts, "", hook, "@watchtower", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "noble") {
@@ -50,7 +50,7 @@ func TestDispatchKeywordCaseInsensitive(t *testing.T) {
 func TestDispatchKeywordBareShowsHelp(t *testing.T) {
 	hook := &captureHook{}
 	// Just the keyword alone (no command) should show help.
-	if err := Dispatch("@watchtower", testArtefacts, "", hook, "@watchtower"); err != nil {
+	if err := Dispatch(context.Background(), "test", "@watchtower", testArtefacts, "", hook, "@watchtower", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "builds status") {
@@ -61,7 +61,7 @@ func TestDispatchKeywordBareShowsHelp(t *testing.T) {
 func TestDispatchNoKeyword(t *testing.T) {
 	hook := &captureHook{}
 	// Empty keyword → every message is routed without filtering.
-	if err := Dispatch("help", testArtefacts, "", hook, ""); err != nil {
+	if err := Dispatch(context.Background(), "test", "help", testArtefacts, "", hook, "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "builds status") {
@@ -173,7 +173,7 @@ func TestRunPollerDispatchesKeywordPosts(t *testing.T) {
 		Keyword:   "@watchtower",
 	}
 
-	RunPoller(ctx, cfg, snap, "", hook, srv.Client())
+	RunPoller(ctx, cfg, snap, "", hook, srv.Client(), nil)
 
 	// After the context expires the poller should have dispatched the "help" command.
 	if !strings.Contains(hook.last, "builds status") {
@@ -203,7 +203,7 @@ func TestRunPollerDisabledWhenNoCreds(t *testing.T) {
 		ChannelID: "ch",
 		Interval:  10 * time.Millisecond,
 		Keyword:   "@watchtower",
-	}, snap, "", hook, srv.Client())
+	}, snap, "", hook, srv.Client(), nil)
 
 	if called {
 		t.Error("poller should not make HTTP calls when Token is missing")
@@ -217,7 +217,7 @@ func TestDispatchKeywordWithBuildsStatus(t *testing.T) {
 	artefacts := []buildapi.Artefact{
 		{ID: 1, Release: "noble", Version: time.Now().UTC().Format("20060102")},
 	}
-	if err := Dispatch("@watchtower builds status", artefacts, "", hook, "@watchtower"); err != nil {
+	if err := Dispatch(context.Background(), "test", "@watchtower builds status", artefacts, "", hook, "@watchtower", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "noble") {

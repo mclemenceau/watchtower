@@ -21,7 +21,9 @@ type Config struct {
 	MattermostPollInterval time.Duration // how often to poll (default 15s)
 	WatchtowerKeyword      string        // trigger keyword (default @watchtower)
 
-	// TODO: re-add OpenRouterAPIKey + LLMModel when log analysis is implemented
+	// LLM-assisted intent resolution (optional — feature is disabled when OpenRouterAPIKey is empty)
+	OpenRouterAPIKey string
+	LLMModel         string
 }
 
 func Load() (*Config, error) {
@@ -45,6 +47,8 @@ func Load() (*Config, error) {
 		MattermostChannelID:    os.Getenv("MATTERMOST_CHANNEL_ID"),
 		MattermostPollInterval: pollInterval,
 		WatchtowerKeyword:      envOrDefault("WATCHTOWER_KEYWORD", "@watchtower"),
+		OpenRouterAPIKey:       os.Getenv("OPENROUTER_API_KEY"),
+		LLMModel:               envOrDefault("LLM_MODEL", "openai/gpt-4o-mini"),
 	}, nil
 }
 

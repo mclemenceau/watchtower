@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/mclemenceau/watchtower/internal/buildapi"
+	"github.com/mclemenceau/watchtower/internal/intent"
 	"github.com/mclemenceau/watchtower/internal/state"
 )
 
@@ -20,7 +21,8 @@ type SnapshotReader func() ([]buildapi.Artefact, error)
 // is cancelled. defaultRelease pins the status table to a specific release (empty =
 // auto-detect from snapshot). keyword is the optional trigger prefix (e.g.
 // "@watchtower"); pass empty string to dispatch every line regardless of prefix.
-func RunREPL(ctx context.Context, in io.Reader, hook WebhookClient, snap *state.Snapshot, defaultRelease string, keyword string) {
+// resolver is optional; pass nil to disable LLM-assisted intent resolution.
+func RunREPL(ctx context.Context, in io.Reader, hook WebhookClient, snap *state.Snapshot, defaultRelease string, keyword string, resolver *intent.Resolver) {
 	fmt.Println("[Watchtower] Bot started. Type a message (Ctrl-D to quit):")
 	fmt.Print("you> ")
 
@@ -52,7 +54,7 @@ func RunREPL(ctx context.Context, in io.Reader, hook WebhookClient, snap *state.
 			continue
 		}
 
-		if dispatchErr := Dispatch(line, artefacts, defaultRelease, hook, keyword); dispatchErr != nil {
+		if dispatchErr := Dispatch(ctx, "repl", line, artefacts, defaultRelease, hook, keyword, resolver); dispatchErr != nil {
 			fmt.Printf("[Watchtower] error: %v\n", dispatchErr)
 		}
 
