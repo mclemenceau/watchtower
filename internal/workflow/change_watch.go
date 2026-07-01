@@ -8,7 +8,7 @@ import (
 	sdk "go.temporal.io/sdk/workflow"
 
 	"github.com/mclemenceau/watchtower/internal/activities"
-	"github.com/mclemenceau/watchtower/internal/buildapi"
+	"github.com/mclemenceau/watchtower/internal/domain"
 	"github.com/mclemenceau/watchtower/internal/state"
 )
 
@@ -20,7 +20,7 @@ func ChangeWatchWorkflow(ctx sdk.Context) error {
 	var act *activities.Activities
 
 	// Fetch fresh artefact list from Test Observer.
-	var fresh []buildapi.Artefact
+	var fresh []domain.Artefact
 	if err := sdk.ExecuteActivity(ctx, act.FetchBuildStatus).Get(ctx, &fresh); err != nil {
 		return err
 	}
@@ -30,14 +30,14 @@ func ChangeWatchWorkflow(ctx sdk.Context) error {
 	testCtx := sdk.WithActivityOptions(ctx, sdk.ActivityOptions{
 		StartToCloseTimeout: 5 * time.Minute,
 	})
-	var enriched []buildapi.Artefact
+	var enriched []domain.Artefact
 	if err := sdk.ExecuteActivity(testCtx, act.FetchTestExecutions, fresh).Get(testCtx, &enriched); err != nil {
 		// Non-fatal: fall back to unenriched artefacts so builds still work.
 		sdk.GetLogger(ctx).Warn("FetchTestExecutions failed, test data will be stale", "error", err)
 		enriched = fresh
 	}
 
-	var old []buildapi.Artefact
+	var old []domain.Artefact
 	if err := sdk.ExecuteActivity(ctx, act.LoadSnapshot).Get(ctx, &old); err != nil {
 		return err
 	}
@@ -64,7 +64,7 @@ func ChangeWatchWorkflow(ctx sdk.Context) error {
 	return nil
 }
 
-func formatChangeReport(r buildapi.ChangeReport) string {
+func formatChangeReport(r domain.ChangeReport) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "**Change Report** · %s\n\n", time.Now().UTC().Format("2006-01-02 15:04 UTC"))
 
@@ -104,13 +104,13 @@ func formatChangeReport(r buildapi.ChangeReport) string {
 		sb.WriteString("|---------|---------|----------|---------|-----|-------|-----|\n")
 		for _, n := range r.NewArtefacts {
 			fmt.Fprintf(&sb, "| %s | %s | %s | %s | %s | %s | %s |\n",
-				n.Release, n.OS, n.Name, n.Version, buildapi.ImageAge(n.Version), buildapi.BuildStatus(n.Version), buildapi.LogCell(n.ImageURL))
+				n.Release, n.OS, n.Name, n.Version, domain.ImageAge(n.Version), domain.BuildStatus(n.Version), domain.LogCell(n.ImageURL))
 		}
 	}
 
 	return sb.String()
 }
 
-func hasChanges(r buildapi.ChangeReport) bool {
+func hasChanges(r domain.ChangeReport) bool {
 	return len(r.NewFailures)+len(r.Recoveries)+len(r.OtherChanges)+len(r.NewArtefacts) > 0
 }

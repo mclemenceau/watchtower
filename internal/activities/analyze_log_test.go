@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/mclemenceau/watchtower/internal/buildapi"
+	"github.com/mclemenceau/watchtower/internal/domain"
 	"github.com/mclemenceau/watchtower/internal/llm"
 )
 
@@ -67,12 +67,12 @@ func TestImageAge(t *testing.T) {
 		{"", true},
 	}
 	for _, tc := range cases {
-		got := buildapi.ImageAge(tc.version)
+		got := domain.ImageAge(tc.version)
 		if tc.wantErr && got != "unknown" {
-			t.Errorf("buildapi.ImageAge(%q) = %q, want %q", tc.version, got, "unknown")
+			t.Errorf("domain.ImageAge(%q) = %q, want %q", tc.version, got, "unknown")
 		}
 		if !tc.wantErr && got == "unknown" {
-			t.Errorf("buildapi.ImageAge(%q) returned %q unexpectedly", tc.version, got)
+			t.Errorf("domain.ImageAge(%q) returned %q unexpectedly", tc.version, got)
 		}
 	}
 }

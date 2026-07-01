@@ -6,10 +6,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/mclemenceau/watchtower/internal/buildapi"
+	"github.com/mclemenceau/watchtower/internal/domain"
 )
 
-// Snapshot persists []Artefact to a JSON file with atomic writes.
+// Snapshot persists []domain.Artefact to a JSON file with atomic writes.
 type Snapshot struct {
 	path string
 }
@@ -19,7 +19,7 @@ func New(path string) *Snapshot {
 }
 
 // Read returns the persisted artefact list. Returns nil, nil when no snapshot exists yet.
-func (s *Snapshot) Read() ([]buildapi.Artefact, error) {
+func (s *Snapshot) Read() ([]domain.Artefact, error) {
 	data, err := os.ReadFile(s.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -27,7 +27,7 @@ func (s *Snapshot) Read() ([]buildapi.Artefact, error) {
 	if err != nil {
 		return nil, err
 	}
-	var artefacts []buildapi.Artefact
+	var artefacts []domain.Artefact
 	if err := json.Unmarshal(data, &artefacts); err != nil {
 		return nil, err
 	}
@@ -35,7 +35,7 @@ func (s *Snapshot) Read() ([]buildapi.Artefact, error) {
 }
 
 // Write persists artefacts atomically: write to a temp file then rename.
-func (s *Snapshot) Write(artefacts []buildapi.Artefact) error {
+func (s *Snapshot) Write(artefacts []domain.Artefact) error {
 	data, err := json.MarshalIndent(artefacts, "", "  ")
 	if err != nil {
 		return err
@@ -54,13 +54,13 @@ func (s *Snapshot) Write(artefacts []buildapi.Artefact) error {
 // Diff compares an old snapshot against a fresh fetch and categorises every change.
 // Status vocabulary: APPROVED | MARKED_AS_FAILED | UNDECIDED
 // MARKED_AS_FAILED is treated as the failure state for alerting purposes.
-func Diff(old, fresh []buildapi.Artefact) buildapi.ChangeReport {
-	oldByID := make(map[int]buildapi.Artefact, len(old))
+func Diff(old, fresh []domain.Artefact) domain.ChangeReport {
+	oldByID := make(map[int]domain.Artefact, len(old))
 	for _, a := range old {
 		oldByID[a.ID] = a
 	}
 
-	var report buildapi.ChangeReport
+	var report domain.ChangeReport
 
 	for _, a := range fresh {
 		prev, existed := oldByID[a.ID]
@@ -71,7 +71,7 @@ func Diff(old, fresh []buildapi.Artefact) buildapi.ChangeReport {
 		if prev.Status == a.Status {
 			continue
 		}
-		delta := buildapi.ArtefactDelta{
+		delta := domain.ArtefactDelta{
 			Name:      a.Name,
 			Release:   a.Release,
 			Version:   a.Version,
@@ -94,7 +94,7 @@ func Diff(old, fresh []buildapi.Artefact) buildapi.ChangeReport {
 // LatestRelease returns the release name with the most recent build activity.
 // Version strings may be YYYYMMDD or YYYYMMDD.N (re-spin suffix).
 // Primary sort: base date (first 8 chars). Tiebreaker: artefact count (more = more active).
-func LatestRelease(artefacts []buildapi.Artefact) string {
+func LatestRelease(artefacts []domain.Artefact) string {
 	type releaseStats struct {
 		baseDate string
 		count    int
