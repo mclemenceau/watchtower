@@ -15,11 +15,13 @@ DEFAULT_RELEASE        # Pin status table to a release; empty = auto-detect
 # LLM_MODEL            # OpenRouter model slug
 
 ## Key conventions
-- WebhookClient and ArtefactClient and LLMClient are interfaces — always have a mock/stub impl for tests
+- Port interfaces (ArtefactSource, BuildSource, Notifier, LLMClient, LogFetcher, SnapshotStore)
+  live in `internal/ports/`; always have a mock/stub impl for tests in the adapter package
 - Errors wrapped with context: fmt.Errorf("activityName: %w", err)
 - snapshot.json written atomically (write to tmp file, rename)
-- Never import internal packages circularly — config has no deps, llm depends only on config
-- mattermost.Dispatch is pure (no I/O side effects beyond the WebhookClient) — easy to unit test
+- Dependency direction: cmd/bot → adapters → application → ports → domain
+- Never import internal packages circularly — domain has no deps, ports depends only on domain
+- application.Dispatch is pure (no I/O side effects beyond the ports.Notifier) — easy to unit test
 
 ## Running locally
 
@@ -65,7 +67,9 @@ For interactive development prefer Option B.
 | `make reset`        | `down -v` + `up` — full wipe of all volumes and fresh start        |
 
 ## Test strategy
-Test these:   state/snapshot.go (diff logic), analyze_log.go (JSON parsing), mattermost/dispatch.go (command routing)
+Test these:   domain/artefact.go (pure helpers), state/snapshot.go (diff logic),
+              activities/analyze_log.go (JSON parsing), application/commands.go (command routing),
+              application/formatters.go (markdown formatting)
 Skip today:   Temporal workflow sequencing, real HTTP clients
 
 ## Development rules
