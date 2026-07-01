@@ -8,30 +8,19 @@ import (
 	"time"
 
 	"github.com/mclemenceau/watchtower/internal/domain"
-	"github.com/mclemenceau/watchtower/internal/llm"
-	"github.com/mclemenceau/watchtower/internal/mattermost"
+	"github.com/mclemenceau/watchtower/internal/ports"
 	"github.com/mclemenceau/watchtower/internal/state"
 )
 
 // Activities holds the dependencies injected at worker startup.
 type Activities struct {
-	Artefacts      artefactClient
-	Tests          testClient
-	Snapshot       *state.Snapshot
-	Hook           mattermost.WebhookClient
+	Artefacts      ports.ArtefactSource
+	Tests          ports.BuildSource
+	Snapshot       ports.SnapshotStore
+	Hook           ports.Notifier
+	LogFetcher     ports.LogFetcher
 	DefaultRelease string // pin status table to this release; empty = auto-detect
-	// TODO: wire LLM when log analysis is implemented
-	LLM llm.LLMClient
-}
-
-// artefactClient is the minimal interface needed from buildapi.ArtefactClient.
-type artefactClient interface {
-	FetchArtefacts(ctx context.Context) ([]domain.Artefact, error)
-}
-
-// testClient is the minimal interface needed from testapi.TestClient.
-type testClient interface {
-	FetchBuilds(ctx context.Context, artefactID int) ([]domain.ArtefactBuild, error)
+	LLM            ports.LLMClient
 }
 
 func (a *Activities) FetchBuildStatus(ctx context.Context) ([]domain.Artefact, error) {
@@ -108,7 +97,7 @@ func (a *Activities) FormatStatusTable(_ context.Context, artefacts []domain.Art
 	return sb.String(), nil
 }
 
-// NotifyChannel sends a message to the Mattermost channel (or stdout in simulation mode).
+// NotifyChannel sends a message to the notification channel.
 func (a *Activities) NotifyChannel(_ context.Context, text string) error {
 	if err := a.Hook.Send(text); err != nil {
 		return fmt.Errorf("NotifyChannel: %w", err)

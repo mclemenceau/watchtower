@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mclemenceau/watchtower/internal/llm"
+	"github.com/mclemenceau/watchtower/internal/ports"
 )
 
 // sessionTTL is how long a pending clarification session lives without activity.
@@ -97,13 +97,13 @@ type session struct {
 // Resolver maps free-text messages to bot commands using an LLM.
 // It is safe for concurrent use.
 type Resolver struct {
-	llm      llm.LLMClient
+	llm      ports.LLMClient
 	mu       sync.Mutex
 	sessions map[string]*session
 }
 
 // New creates a Resolver backed by the given LLMClient.
-func New(client llm.LLMClient) *Resolver {
+func New(client ports.LLMClient) *Resolver {
 	return &Resolver{
 		llm:      client,
 		sessions: make(map[string]*session),
@@ -120,7 +120,7 @@ const confidenceThreshold = 0.7
 //     continues.
 //   - Otherwise a fresh LLM call is made.
 //
-// The caller should pass the result to mattermost.Dispatch when Kind==Dispatched,
+// The caller should pass the result to application.Dispatch when Kind==Dispatched,
 // send Resolution.Reply to the user when Kind==NeedsInfo or Kind==Failed.
 func (r *Resolver) Resolve(ctx context.Context, sessionID, msg string) Resolution {
 	r.mu.Lock()
