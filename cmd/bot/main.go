@@ -6,23 +6,53 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"os"
+	"time"
 
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/worker"
 
 	"github.com/mclemenceau/watchtower/internal/activities"
-	"github.com/mclemenceau/watchtower/internal/buildapi"
+	mattermostadapter "github.com/mclemenceau/watchtower/internal/adapters/mattermost"
+	"github.com/mclemenceau/watchtower/internal/adapters/openrouter"
+	"github.com/mclemenceau/watchtower/internal/adapters/testobserver"
 	"github.com/mclemenceau/watchtower/internal/config"
+	"github.com/mclemenceau/watchtower/internal/domain"
 	"github.com/mclemenceau/watchtower/internal/intent"
-	"github.com/mclemenceau/watchtower/internal/llm"
 	"github.com/mclemenceau/watchtower/internal/mattermost"
+	"github.com/mclemenceau/watchtower/internal/ports"
 	"github.com/mclemenceau/watchtower/internal/state"
-	"github.com/mclemenceau/watchtower/internal/testapi"
 	watchtowerworkflow "github.com/mclemenceau/watchtower/internal/workflow"
 )
 
 const taskQueue = "watchtower"
+
+// httpLogFetcher implements ports.LogFetcher using a standard http.Client.
+type httpLogFetcher struct {
+	client *http.Client
+}
+
+func (f *httpLogFetcher) Fetch(ctx context.Context, url string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", fmt.Errorf("LogFetcher: new request: %w", err)
+	}
+	resp, err := f.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("LogFetcher: %w", err)
+	}
+	defer resp.Body.Close() //nolint:errcheck
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("LogFetcher: unexpected status %d", resp.StatusCode)
+	}
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("LogFetcher: read: %w", err)
+	}
+	return string(raw), nil
+}
 
 func main() {
 	verbose := flag.Bool("v", false, "enable verbose logging")
@@ -40,22 +70,27 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Select webhook client: real Mattermost or stdout simulation.
-	var hook mattermost.WebhookClient
+	// Select notifier: real Mattermost webhook or stdout simulation.
+	var notifier ports.Notifier
 	if cfg.MattermostWebhookURL != "" {
-		hook = mattermost.NewHTTPWebhookClient(cfg.MattermostWebhookURL)
+		notifier = mattermostadapter.NewHTTPNotifier(cfg.MattermostWebhookURL)
 		log.Printf("mattermost webhook: %s", cfg.MattermostWebhookURL)
 	} else {
-		hook = &mattermost.StdoutWebhookClient{}
+		notifier = &mattermostadapter.StdoutNotifier{}
 		log.Print("mattermost webhook: stdout simulation (set MATTERMOST_WEBHOOK_URL for real Mattermost)")
 	}
 
+	artefactSrc := testobserver.NewHTTPArtefactSource(cfg.TestObserverURL)
+	buildSrc := testobserver.NewHTTPBuildSource(cfg.TestObserverURL)
 	snap := state.New("state/snapshot.json")
+	logFetcher := &httpLogFetcher{client: &http.Client{Timeout: 30 * time.Second}}
 
 	// Build optional LLM-backed intent resolver (disabled when API key is absent).
 	var resolver *intent.Resolver
+	var llmClient ports.LLMClient
 	if cfg.OpenRouterAPIKey != "" {
-		resolver = intent.New(llm.NewOpenRouterClient(cfg.OpenRouterAPIKey, cfg.LLMModel))
+		llmClient = openrouter.NewClient(cfg.OpenRouterAPIKey, cfg.LLMModel)
+		resolver = intent.New(llmClient)
 		log.Printf("intent resolver: enabled (model: %s)", cfg.LLMModel)
 	} else {
 		log.Print("intent resolver: disabled (set OPENROUTER_API_KEY to enable)")
@@ -74,11 +109,13 @@ func main() {
 	defer c.Close()
 
 	act := &activities.Activities{
-		Artefacts:      buildapi.NewHTTPClient(cfg.TestObserverURL),
-		Tests:          testapi.NewHTTPTestClient(cfg.TestObserverURL),
+		Artefacts:      artefactSrc,
+		Tests:          buildSrc,
 		Snapshot:       snap,
-		Hook:           hook,
+		Hook:           notifier,
+		LogFetcher:     logFetcher,
 		DefaultRelease: cfg.DefaultRelease,
+		LLM:            llmClient,
 	}
 
 	// Register and start the Temporal worker in the background.
@@ -115,10 +152,10 @@ func main() {
 		ChannelID: cfg.MattermostChannelID,
 		Interval:  cfg.MattermostPollInterval,
 		Keyword:   cfg.WatchtowerKeyword,
-	}, snap, cfg.DefaultRelease, hook, nil, resolver)
+	}, snap, cfg.DefaultRelease, notifier, nil, resolver)
 
 	// Run the interactive REPL — blocks until stdin is closed or Ctrl-D.
-	mattermost.RunREPL(context.Background(), os.Stdin, hook, snap, cfg.DefaultRelease, cfg.WatchtowerKeyword, resolver)
+	mattermost.RunREPL(context.Background(), os.Stdin, notifier, snap, cfg.DefaultRelease, cfg.WatchtowerKeyword, resolver)
 }
 
 func startCronWorkflows(c client.Client, cronSchedule string) {
@@ -189,7 +226,7 @@ func triggerInitialFetch(c client.Client, snap *state.Snapshot) {
 }
 
 // hasTestData returns true if at least one artefact has build/test data cached.
-func hasTestData(artefacts []buildapi.Artefact) bool {
+func hasTestData(artefacts []domain.Artefact) bool {
 	for _, a := range artefacts {
 		if len(a.Builds) > 0 {
 			return true
