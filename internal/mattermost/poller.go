@@ -10,7 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mclemenceau/watchtower/internal/application"
 	"github.com/mclemenceau/watchtower/internal/intent"
+	"github.com/mclemenceau/watchtower/internal/ports"
 	"github.com/mclemenceau/watchtower/internal/state"
 )
 
@@ -44,7 +46,7 @@ type mmPost struct {
 
 // RunPoller starts a polling loop that reads new posts from a Mattermost channel,
 // filters those that begin with cfg.Keyword, strips the keyword prefix, and
-// dispatches the remaining text to Dispatch. It runs until ctx is cancelled.
+// dispatches the remaining text to application.Dispatch. It runs until ctx is cancelled.
 //
 // snap is used to read fresh artefact data on every dispatch. defaultRelease pins
 // the status table to a release (empty = auto-detect).
@@ -53,7 +55,7 @@ type mmPost struct {
 //
 // The HTTP client used is the package-level default; inject a custom one via
 // the httpClient parameter to override in tests.
-func RunPoller(ctx context.Context, cfg PollerConfig, snap *state.Snapshot, defaultRelease string, hook WebhookClient, httpClient *http.Client, resolver *intent.Resolver) {
+func RunPoller(ctx context.Context, cfg PollerConfig, snap *state.Snapshot, defaultRelease string, hook ports.Notifier, httpClient *http.Client, resolver *intent.Resolver) {
 	if cfg.Token == "" || cfg.ChannelID == "" || cfg.ServerURL == "" {
 		log.Print("mattermost poller: disabled (MATTERMOST_TOKEN, MATTERMOST_SERVER_URL, or MATTERMOST_CHANNEL_ID not set)")
 		return
@@ -112,7 +114,7 @@ func RunPoller(ctx context.Context, cfg PollerConfig, snap *state.Snapshot, defa
 				}
 				// Use channelID+userID as the session key for multi-turn clarification.
 				sessionID := cfg.ChannelID + ":" + post.UserId
-				if err := Dispatch(ctx, sessionID, cmd, artefacts, defaultRelease, hook, "", resolver); err != nil {
+				if err := application.Dispatch(ctx, sessionID, cmd, artefacts, defaultRelease, hook, "", resolver); err != nil {
 					log.Printf("mattermost poller: dispatch %q: %v", cmd, err)
 				}
 			}
