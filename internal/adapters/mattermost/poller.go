@@ -52,10 +52,7 @@ type mmPost struct {
 // the status table to a release (empty = auto-detect).
 //
 // resolver is optional; pass nil to disable LLM-assisted intent resolution.
-//
-// The HTTP client used is the package-level default; inject a custom one via
-// the httpClient parameter to override in tests.
-func RunPoller(ctx context.Context, cfg PollerConfig, snap *state.Snapshot, defaultRelease string, hook ports.Notifier, httpClient *http.Client, resolver *intent.Resolver) {
+func RunPoller(ctx context.Context, cfg PollerConfig, snap *state.Snapshot, defaultRelease string, notifier ports.Notifier, httpClient *http.Client, resolver *intent.Resolver) {
 	if cfg.Token == "" || cfg.ChannelID == "" || cfg.ServerURL == "" {
 		log.Print("mattermost poller: disabled (MATTERMOST_TOKEN, MATTERMOST_SERVER_URL, or MATTERMOST_CHANNEL_ID not set)")
 		return
@@ -114,7 +111,7 @@ func RunPoller(ctx context.Context, cfg PollerConfig, snap *state.Snapshot, defa
 				}
 				// Use channelID+userID as the session key for multi-turn clarification.
 				sessionID := cfg.ChannelID + ":" + post.UserId
-				if err := application.Dispatch(ctx, sessionID, cmd, artefacts, defaultRelease, hook, "", resolver); err != nil {
+				if err := application.Dispatch(ctx, sessionID, cmd, artefacts, defaultRelease, notifier, "", resolver); err != nil {
 					log.Printf("mattermost poller: dispatch %q: %v", cmd, err)
 				}
 			}
@@ -124,8 +121,7 @@ func RunPoller(ctx context.Context, cfg PollerConfig, snap *state.Snapshot, defa
 
 // fetchNewPosts calls the Mattermost Posts API for posts created after sinceMs
 // (Unix milliseconds). Returns the posts in chronological order and an updated
-// sinceMs cursor (the maximum CreateAt seen, or the original value if no posts
-// were returned).
+// sinceMs cursor.
 func fetchNewPosts(ctx context.Context, client *http.Client, cfg PollerConfig, sinceMs int64) ([]mmPost, int64, error) {
 	url := fmt.Sprintf("%s/api/v4/channels/%s/posts?since=%d", strings.TrimRight(cfg.ServerURL, "/"), cfg.ChannelID, sinceMs)
 

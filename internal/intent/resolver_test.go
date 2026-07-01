@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mclemenceau/watchtower/internal/llm"
+	"github.com/mclemenceau/watchtower/internal/adapters/openrouter"
 )
 
 // jsonResp builds a minimal intent JSON response string.
@@ -28,7 +28,7 @@ func floatStr(f float64) string {
 }
 
 func TestResolve_Dispatched(t *testing.T) {
-	mock := &llm.MockLLMClient{
+	mock := &openrouter.MockLLMClient{
 		Response: jsonResp("builds status noble", 0.9, ""),
 	}
 	r := New(mock)
@@ -44,7 +44,7 @@ func TestResolve_Dispatched(t *testing.T) {
 }
 
 func TestResolve_NeedsInfo(t *testing.T) {
-	mock := &llm.MockLLMClient{
+	mock := &openrouter.MockLLMClient{
 		Response: jsonResp("", 0.2, "Do you want build status or test status?"),
 	}
 	r := New(mock)
@@ -60,7 +60,7 @@ func TestResolve_NeedsInfo(t *testing.T) {
 }
 
 func TestResolve_Failed_LLMError(t *testing.T) {
-	mock := &llm.MockLLMClient{
+	mock := &openrouter.MockLLMClient{
 		Err: errors.New("network timeout"),
 	}
 	r := New(mock)
@@ -76,7 +76,7 @@ func TestResolve_Failed_LLMError(t *testing.T) {
 }
 
 func TestResolve_Failed_BadJSON(t *testing.T) {
-	mock := &llm.MockLLMClient{
+	mock := &openrouter.MockLLMClient{
 		Response: "not json at all",
 	}
 	r := New(mock)
@@ -96,7 +96,7 @@ func TestResolve_MultiTurn(t *testing.T) {
 		jsonResp("builds status", 0.9, ""),
 	}
 	i := 0
-	mock := &llm.MockLLMClient{}
+	mock := &openrouter.MockLLMClient{}
 
 	r := New(mock)
 
@@ -140,7 +140,7 @@ func TestResolve_MultiTurn(t *testing.T) {
 
 func TestResolve_SessionClearedAfterFailure(t *testing.T) {
 	// Seed a pending session manually, then simulate an LLM error.
-	mock := &llm.MockLLMClient{Err: errors.New("timeout")}
+	mock := &openrouter.MockLLMClient{Err: errors.New("timeout")}
 	r := New(mock)
 
 	r.mu.Lock()

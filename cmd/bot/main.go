@@ -20,7 +20,6 @@ import (
 	"github.com/mclemenceau/watchtower/internal/config"
 	"github.com/mclemenceau/watchtower/internal/domain"
 	"github.com/mclemenceau/watchtower/internal/intent"
-	"github.com/mclemenceau/watchtower/internal/mattermost"
 	"github.com/mclemenceau/watchtower/internal/ports"
 	"github.com/mclemenceau/watchtower/internal/state"
 	watchtowerworkflow "github.com/mclemenceau/watchtower/internal/workflow"
@@ -146,7 +145,7 @@ func main() {
 	// Start the Mattermost channel poller in the background (no-op when credentials are absent).
 	pollerCtx, cancelPoller := context.WithCancel(context.Background())
 	defer cancelPoller()
-	go mattermost.RunPoller(pollerCtx, mattermost.PollerConfig{
+	go mattermostadapter.RunPoller(pollerCtx, mattermostadapter.PollerConfig{
 		ServerURL: cfg.MattermostServerURL,
 		Token:     cfg.MattermostToken,
 		ChannelID: cfg.MattermostChannelID,
@@ -155,7 +154,7 @@ func main() {
 	}, snap, cfg.DefaultRelease, notifier, nil, resolver)
 
 	// Run the interactive REPL — blocks until stdin is closed or Ctrl-D.
-	mattermost.RunREPL(context.Background(), os.Stdin, notifier, snap, cfg.DefaultRelease, cfg.WatchtowerKeyword, resolver)
+	mattermostadapter.RunREPL(context.Background(), os.Stdin, notifier, snap, cfg.DefaultRelease, cfg.WatchtowerKeyword, resolver)
 }
 
 func startCronWorkflows(c client.Client, cronSchedule string) {

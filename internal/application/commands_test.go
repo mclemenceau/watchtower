@@ -1,4 +1,4 @@
-package mattermost
+package application
 
 import (
 	"context"
@@ -6,16 +6,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mclemenceau/watchtower/internal/buildapi"
+	"github.com/mclemenceau/watchtower/internal/domain"
 )
 
-// captureHook records the last message sent via Send.
-type captureHook struct {
+// captureNotifier records the last message sent via Send.
+type captureNotifier struct {
 	last string
 	err  error
 }
 
-func (c *captureHook) Send(text string) error {
+func (c *captureNotifier) Send(text string) error {
 	c.last = text
 	return c.err
 }
@@ -25,7 +25,7 @@ var (
 	yesterday = time.Now().UTC().AddDate(0, 0, -1).Format("20060102")
 )
 
-var testArtefacts = []buildapi.Artefact{
+var testArtefacts = []domain.Artefact{
 	// noble: 1 built today, 1 not built (yesterday)
 	{ID: 1, Name: "ubuntu-desktop-amd64", OS: "ubuntu", Release: "noble", Version: today},
 	{ID: 2, Name: "ubuntu-server-amd64", OS: "ubuntu-server", Release: "noble", Version: yesterday},
@@ -35,17 +35,17 @@ var testArtefacts = []buildapi.Artefact{
 
 // testArtefactsWithBuilds has artefacts whose Builds field is populated with
 // realistic test execution data (no live API calls needed).
-var testArtefactsWithBuilds = func() []buildapi.Artefact {
-	env := func(name, arch string) buildapi.Environment {
-		return buildapi.Environment{Name: name, Architecture: arch}
+var testArtefactsWithBuilds = func() []domain.Artefact {
+	env := func(name, arch string) domain.Environment {
+		return domain.Environment{Name: name, Architecture: arch}
 	}
-	return []buildapi.Artefact{
+	return []domain.Artefact{
 		// 1001 — plucky desktop amd64: Jenkins FAILED (displayable)
 		{
 			ID: 1001, Name: "plucky-desktop-amd64.iso", OS: "ubuntu", Release: "plucky", Version: today,
-			Builds: []buildapi.ArtefactBuild{{
+			Builds: []domain.ArtefactBuild{{
 				ID: 2001, Architecture: "amd64",
-				TestExecutions: []buildapi.TestExecution{
+				TestExecutions: []domain.TestExecution{
 					{ID: 3001, TestPlan: "Image build", Status: "PASSED", Environment: env("cdimage.ubuntu.com", "amd64"), CreatedAt: "2026-06-26T06:00:00"},
 					{ID: 3002, TestPlan: "Jenkins image validation", Status: "FAILED", CILink: "https://platform-qa-jenkins.ps5.ubuntu.com/job/ubuntu-plucky-desktop-amd64-iso-static-validation/1/", Environment: env("platform-qa-jenkins.ps5.ubuntu.com", "amd64"), CreatedAt: "2026-06-26T07:00:00"},
 					{ID: 3003, TestPlan: "Manual Testing", Status: "IN_PROGRESS", Environment: env("user manual tests", "amd64"), CreatedAt: "2026-06-26T06:01:00"},
@@ -55,9 +55,9 @@ var testArtefactsWithBuilds = func() []buildapi.Artefact {
 		// 1002 — plucky desktop arm64: no displayable executions
 		{
 			ID: 1002, Name: "plucky-desktop-arm64.iso", OS: "ubuntu", Release: "plucky", Version: today,
-			Builds: []buildapi.ArtefactBuild{{
+			Builds: []domain.ArtefactBuild{{
 				ID: 2002, Architecture: "arm64",
-				TestExecutions: []buildapi.TestExecution{
+				TestExecutions: []domain.TestExecution{
 					{ID: 3004, TestPlan: "Image build", Status: "PASSED", Environment: env("cdimage.ubuntu.com", "arm64"), CreatedAt: "2026-06-26T06:00:00"},
 					{ID: 3005, TestPlan: "Manual Testing", Status: "IN_PROGRESS", Environment: env("user manual tests", "arm64"), CreatedAt: "2026-06-26T06:01:00"},
 				},
@@ -66,9 +66,9 @@ var testArtefactsWithBuilds = func() []buildapi.Artefact {
 		// 1003 — plucky server amd64: Jenkins PASSED (displayable)
 		{
 			ID: 1003, Name: "plucky-server-amd64.iso", OS: "ubuntu-server", Release: "plucky", Version: today,
-			Builds: []buildapi.ArtefactBuild{{
+			Builds: []domain.ArtefactBuild{{
 				ID: 2003, Architecture: "amd64",
-				TestExecutions: []buildapi.TestExecution{
+				TestExecutions: []domain.TestExecution{
 					{ID: 3006, TestPlan: "Image build", Status: "PASSED", Environment: env("cdimage.ubuntu.com", "amd64"), CreatedAt: "2026-06-26T06:00:00"},
 					{ID: 3007, TestPlan: "Jenkins image validation", Status: "PASSED", CILink: "https://platform-qa-jenkins.ps5.ubuntu.com/job/ubuntu-plucky-server-amd64-iso-static-validation/1/", Environment: env("platform-qa-jenkins.ps5.ubuntu.com", "amd64"), CreatedAt: "2026-06-26T07:00:00"},
 					{ID: 3008, TestPlan: "Manual Testing", Status: "IN_PROGRESS", Environment: env("user manual tests", "amd64"), CreatedAt: "2026-06-26T06:01:00"},
@@ -78,9 +78,9 @@ var testArtefactsWithBuilds = func() []buildapi.Artefact {
 		// 1004 — plucky minimal: no displayable executions
 		{
 			ID: 1004, Name: "plucky-minimal-amd64.iso", OS: "ubuntu-minimal", Release: "plucky", Version: yesterday,
-			Builds: []buildapi.ArtefactBuild{{
+			Builds: []domain.ArtefactBuild{{
 				ID: 2004, Architecture: "amd64",
-				TestExecutions: []buildapi.TestExecution{
+				TestExecutions: []domain.TestExecution{
 					{ID: 3009, TestPlan: "Image build", Status: "PASSED", Environment: env("cdimage.ubuntu.com", "amd64"), CreatedAt: "2026-06-26T06:00:00"},
 					{ID: 3010, TestPlan: "Manual Testing", Status: "IN_PROGRESS", Environment: env("user manual tests", "amd64"), CreatedAt: "2026-06-26T06:01:00"},
 				},
@@ -89,9 +89,9 @@ var testArtefactsWithBuilds = func() []buildapi.Artefact {
 		// 1005 — noble desktop amd64: Jenkins PASSED + Manual Testing PASSED (both displayable)
 		{
 			ID: 1005, Name: "noble-desktop-amd64.iso", OS: "ubuntu", Release: "noble", Version: yesterday,
-			Builds: []buildapi.ArtefactBuild{{
+			Builds: []domain.ArtefactBuild{{
 				ID: 2005, Architecture: "amd64",
-				TestExecutions: []buildapi.TestExecution{
+				TestExecutions: []domain.TestExecution{
 					{ID: 3011, TestPlan: "Image build", Status: "PASSED", Environment: env("cdimage.ubuntu.com", "amd64"), CreatedAt: "2026-06-26T06:00:00"},
 					{ID: 3012, TestPlan: "Jenkins image validation", Status: "PASSED", CILink: "https://platform-qa-jenkins.ps5.ubuntu.com/job/ubuntu-noble-desktop-amd64-iso-static-validation/1/", Environment: env("platform-qa-jenkins.ps5.ubuntu.com", "amd64"), CreatedAt: "2026-06-26T07:00:00"},
 					{ID: 3013, TestPlan: "Manual Testing", Status: "PASSED", Environment: env("user manual tests", "amd64"), CreatedAt: "2026-06-26T08:00:00"},
@@ -104,7 +104,7 @@ var testArtefactsWithBuilds = func() []buildapi.Artefact {
 // --- help ---
 
 func TestDispatchHelp(t *testing.T) {
-	hook := &captureHook{}
+	hook := &captureNotifier{}
 	if err := Dispatch(context.Background(), "test", "help", testArtefacts, "", hook, "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestDispatchHelp(t *testing.T) {
 }
 
 func TestDispatchHelpCaseInsensitive(t *testing.T) {
-	hook := &captureHook{}
+	hook := &captureNotifier{}
 	if err := Dispatch(context.Background(), "test", "HELP", testArtefacts, "", hook, "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestDispatchHelpCaseInsensitive(t *testing.T) {
 // --- builds status (summary) ---
 
 func TestDispatchBuildsStatus(t *testing.T) {
-	hook := &captureHook{}
+	hook := &captureNotifier{}
 	if err := Dispatch(context.Background(), "test", "builds status", testArtefacts, "", hook, "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestDispatchBuildsStatus(t *testing.T) {
 }
 
 func TestDispatchBuildsStatusCaseInsensitive(t *testing.T) {
-	hook := &captureHook{}
+	hook := &captureNotifier{}
 	if err := Dispatch(context.Background(), "test", "Builds Status", testArtefacts, "", hook, "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestDispatchBuildsStatusCaseInsensitive(t *testing.T) {
 }
 
 func TestDispatchBuildsStatusEmptySnapshot(t *testing.T) {
-	hook := &captureHook{}
+	hook := &captureNotifier{}
 	if err := Dispatch(context.Background(), "test", "builds status", nil, "", hook, "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -169,7 +169,7 @@ func TestDispatchBuildsStatusEmptySnapshot(t *testing.T) {
 // --- builds status <release> (detail) ---
 
 func TestDispatchBuildsStatusRelease(t *testing.T) {
-	hook := &captureHook{}
+	hook := &captureNotifier{}
 	if err := Dispatch(context.Background(), "test", "builds status noble", testArtefacts, "", hook, "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -194,7 +194,7 @@ func TestDispatchBuildsStatusRelease(t *testing.T) {
 }
 
 func TestDispatchBuildsStatusReleaseCaseInsensitive(t *testing.T) {
-	hook := &captureHook{}
+	hook := &captureNotifier{}
 	if err := Dispatch(context.Background(), "test", "builds status Noble", testArtefacts, "", hook, "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -204,7 +204,7 @@ func TestDispatchBuildsStatusReleaseCaseInsensitive(t *testing.T) {
 }
 
 func TestDispatchBuildsStatusReleaseUnknown(t *testing.T) {
-	hook := &captureHook{}
+	hook := &captureNotifier{}
 	if err := Dispatch(context.Background(), "test", "builds status nonexistent", testArtefacts, "", hook, "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -218,11 +218,11 @@ func TestDispatchBuildsStatusReleaseUnknown(t *testing.T) {
 func TestDispatchBuildsStatusReleaseLogLink(t *testing.T) {
 	imageURL := "https://cdimage.ubuntu.com/ubuntu-server/noble/daily-live/20200101/noble-live-server-amd64.iso"
 	logURL := "https://ubuntu-archive-team.ubuntu.com/cd-build-logs/ubuntu-server/noble/daily-live-20200101.log"
-	artefacts := []buildapi.Artefact{
+	artefacts := []domain.Artefact{
 		{ID: 1, Name: "ubuntu-server-amd64", OS: "ubuntu-server", Release: "noble", Version: "20200101", ImageURL: imageURL},
 		{ID: 2, Name: "ubuntu-desktop-amd64", OS: "ubuntu", Release: "noble", Version: "20200101"},
 	}
-	hook := &captureHook{}
+	hook := &captureNotifier{}
 	if err := Dispatch(context.Background(), "test", "builds status noble", artefacts, "", hook, "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -247,7 +247,7 @@ func TestDispatchBuildsStatusReleaseLogLink(t *testing.T) {
 // --- builds status <release> <product> (product filter) ---
 
 func TestDispatchBuildsStatusReleaseProduct(t *testing.T) {
-	hook := &captureHook{}
+	hook := &captureNotifier{}
 	if err := Dispatch(context.Background(), "test", "builds status noble ubuntu-server", testArtefacts, "", hook, "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -263,7 +263,7 @@ func TestDispatchBuildsStatusReleaseProduct(t *testing.T) {
 }
 
 func TestDispatchBuildsStatusReleaseProductCaseInsensitive(t *testing.T) {
-	hook := &captureHook{}
+	hook := &captureNotifier{}
 	if err := Dispatch(context.Background(), "test", "builds status Noble Ubuntu-Server", testArtefacts, "", hook, "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -276,7 +276,7 @@ func TestDispatchBuildsStatusReleaseProductCaseInsensitive(t *testing.T) {
 }
 
 func TestDispatchBuildsStatusReleaseProductUnknown(t *testing.T) {
-	hook := &captureHook{}
+	hook := &captureNotifier{}
 	if err := Dispatch(context.Background(), "test", "builds status noble nonexistent-product", testArtefacts, "", hook, "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -291,7 +291,7 @@ func TestDispatchBuildsStatusReleaseProductUnknown(t *testing.T) {
 // --- builds (no args or unknown sub-command) ---
 
 func TestDispatchBuildsNoArgs(t *testing.T) {
-	hook := &captureHook{}
+	hook := &captureNotifier{}
 	if err := Dispatch(context.Background(), "test", "builds", testArtefacts, "", hook, "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -301,7 +301,7 @@ func TestDispatchBuildsNoArgs(t *testing.T) {
 }
 
 func TestDispatchBuildsUnknownSubcommand(t *testing.T) {
-	hook := &captureHook{}
+	hook := &captureNotifier{}
 	if err := Dispatch(context.Background(), "test", "builds noble", testArtefacts, "", hook, "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -313,7 +313,7 @@ func TestDispatchBuildsUnknownSubcommand(t *testing.T) {
 // --- unknown / empty ---
 
 func TestDispatchUnknown(t *testing.T) {
-	hook := &captureHook{}
+	hook := &captureNotifier{}
 	if err := Dispatch(context.Background(), "test", "banana", testArtefacts, "", hook, "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -326,7 +326,7 @@ func TestDispatchUnknown(t *testing.T) {
 }
 
 func TestDispatchEmpty(t *testing.T) {
-	hook := &captureHook{}
+	hook := &captureNotifier{}
 	if err := Dispatch(context.Background(), "test", "   ", testArtefacts, "", hook, "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -336,11 +336,11 @@ func TestDispatchEmpty(t *testing.T) {
 }
 
 func TestDispatchBuildsStatusReleaseSortedByProduct(t *testing.T) {
-	artefacts := []buildapi.Artefact{
+	artefacts := []domain.Artefact{
 		{ID: 1, Name: "ubuntu-server-amd64", OS: "ubuntu-server", Release: "noble", Version: today},
 		{ID: 2, Name: "ubuntu-desktop-amd64", OS: "ubuntu", Release: "noble", Version: today},
 	}
-	hook := &captureHook{}
+	hook := &captureNotifier{}
 	if err := Dispatch(context.Background(), "test", "builds status noble", artefacts, "", hook, "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -355,7 +355,7 @@ func TestDispatchBuildsStatusReleaseSortedByProduct(t *testing.T) {
 	}
 }
 
-func TestImageAge(t *testing.T) {
+func TestImageAgeViaDispatch(t *testing.T) {
 	cases := []struct {
 		version string
 		wantErr bool
@@ -367,12 +367,12 @@ func TestImageAge(t *testing.T) {
 		{"", true},
 	}
 	for _, tc := range cases {
-		got := buildapi.ImageAge(tc.version)
+		got := domain.ImageAge(tc.version)
 		if tc.wantErr && got != "unknown" {
-			t.Errorf("buildapi.ImageAge(%q) = %q, want %q", tc.version, got, "unknown")
+			t.Errorf("domain.ImageAge(%q) = %q, want %q", tc.version, got, "unknown")
 		}
 		if !tc.wantErr && got == "unknown" {
-			t.Errorf("buildapi.ImageAge(%q) returned %q unexpectedly", tc.version, got)
+			t.Errorf("domain.ImageAge(%q) returned %q unexpectedly", tc.version, got)
 		}
 	}
 }
@@ -380,14 +380,14 @@ func TestImageAge(t *testing.T) {
 // --- progress bar ---
 
 func TestBuildsStatusProgressBar(t *testing.T) {
-	artefacts := []buildapi.Artefact{
+	artefacts := []domain.Artefact{
 		{ID: 1, Release: "noble", Version: today},
 		{ID: 2, Release: "noble", Version: today},
 		{ID: 3, Release: "noble", Version: today},
 		{ID: 4, Release: "noble", Version: today},
 		{ID: 5, Release: "noble", Version: today},
 	}
-	hook := &captureHook{}
+	hook := &captureNotifier{}
 	if err := Dispatch(context.Background(), "test", "builds status", artefacts, "", hook, "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -401,11 +401,11 @@ func TestBuildsStatusProgressBar(t *testing.T) {
 }
 
 func TestBuildsStatusProgressBarZero(t *testing.T) {
-	artefacts := []buildapi.Artefact{
+	artefacts := []domain.Artefact{
 		{ID: 1, Release: "noble", Version: yesterday},
 		{ID: 2, Release: "noble", Version: yesterday},
 	}
-	hook := &captureHook{}
+	hook := &captureNotifier{}
 	if err := Dispatch(context.Background(), "test", "builds status", artefacts, "", hook, "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -421,7 +421,7 @@ func TestBuildsStatusProgressBarZero(t *testing.T) {
 // --- tests status (summary) ---
 
 func TestDispatchTestsStatusEmptySnapshot(t *testing.T) {
-	hook := &captureHook{}
+	hook := &captureNotifier{}
 	if err := Dispatch(context.Background(), "test", "tests status", nil, "", hook, "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -431,7 +431,7 @@ func TestDispatchTestsStatusEmptySnapshot(t *testing.T) {
 }
 
 func TestDispatchTestsStatus(t *testing.T) {
-	hook := &captureHook{}
+	hook := &captureNotifier{}
 	if err := Dispatch(context.Background(), "test", "tests status", testArtefactsWithBuilds, "", hook, "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -450,7 +450,7 @@ func TestDispatchTestsStatus(t *testing.T) {
 }
 
 func TestDispatchTestsStatusCaseInsensitive(t *testing.T) {
-	hook := &captureHook{}
+	hook := &captureNotifier{}
 	if err := Dispatch(context.Background(), "test", "Tests Status", testArtefactsWithBuilds, "", hook, "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -461,7 +461,7 @@ func TestDispatchTestsStatusCaseInsensitive(t *testing.T) {
 
 func TestDispatchTestsStatusNoBuildsInSnapshot(t *testing.T) {
 	// Artefacts with no Builds field (e.g. snapshot not yet enriched).
-	hook := &captureHook{}
+	hook := &captureNotifier{}
 	if err := Dispatch(context.Background(), "test", "tests status", testArtefacts, "", hook, "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -473,7 +473,7 @@ func TestDispatchTestsStatusNoBuildsInSnapshot(t *testing.T) {
 // --- tests status <release> (detail) ---
 
 func TestDispatchTestsStatusRelease(t *testing.T) {
-	hook := &captureHook{}
+	hook := &captureNotifier{}
 	if err := Dispatch(context.Background(), "test", "tests status plucky", testArtefactsWithBuilds, "", hook, "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -502,7 +502,7 @@ func TestDispatchTestsStatusRelease(t *testing.T) {
 }
 
 func TestDispatchTestsStatusReleaseUnknown(t *testing.T) {
-	hook := &captureHook{}
+	hook := &captureNotifier{}
 	if err := Dispatch(context.Background(), "test", "tests status nonexistent", testArtefactsWithBuilds, "", hook, "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -513,13 +513,13 @@ func TestDispatchTestsStatusReleaseUnknown(t *testing.T) {
 
 func TestDispatchTestsStatusReleaseNoTests(t *testing.T) {
 	// Release where all artefacts have only Image build + Manual Testing IN_PROGRESS.
-	artefacts := []buildapi.Artefact{
+	artefacts := []domain.Artefact{
 		{ID: 1002, Name: "plucky-desktop-arm64.iso", OS: "ubuntu", Release: "plucky", Version: today,
 			Builds: testArtefactsWithBuilds[1].Builds},
 		{ID: 1004, Name: "plucky-minimal-amd64.iso", OS: "ubuntu-minimal", Release: "plucky", Version: today,
 			Builds: testArtefactsWithBuilds[3].Builds},
 	}
-	hook := &captureHook{}
+	hook := &captureNotifier{}
 	if err := Dispatch(context.Background(), "test", "tests status plucky", artefacts, "", hook, "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -531,7 +531,7 @@ func TestDispatchTestsStatusReleaseNoTests(t *testing.T) {
 // --- tests status <release> <product> (product filter) ---
 
 func TestDispatchTestsStatusReleaseProduct(t *testing.T) {
-	hook := &captureHook{}
+	hook := &captureNotifier{}
 	if err := Dispatch(context.Background(), "test", "tests status plucky ubuntu-server", testArtefactsWithBuilds, "", hook, "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -544,7 +544,7 @@ func TestDispatchTestsStatusReleaseProduct(t *testing.T) {
 }
 
 func TestDispatchTestsStatusReleaseProductUnknown(t *testing.T) {
-	hook := &captureHook{}
+	hook := &captureNotifier{}
 	if err := Dispatch(context.Background(), "test", "tests status plucky nonexistent-product", testArtefactsWithBuilds, "", hook, "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -559,7 +559,7 @@ func TestDispatchTestsStatusReleaseProductUnknown(t *testing.T) {
 // --- tests (no args or unknown sub-command) ---
 
 func TestDispatchTestsNoArgs(t *testing.T) {
-	hook := &captureHook{}
+	hook := &captureNotifier{}
 	if err := Dispatch(context.Background(), "test", "tests", testArtefacts, "", hook, "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -569,7 +569,7 @@ func TestDispatchTestsNoArgs(t *testing.T) {
 }
 
 func TestDispatchTestsUnknownSubcommand(t *testing.T) {
-	hook := &captureHook{}
+	hook := &captureNotifier{}
 	if err := Dispatch(context.Background(), "test", "tests noble", testArtefacts, "", hook, "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -581,12 +581,81 @@ func TestDispatchTestsUnknownSubcommand(t *testing.T) {
 // --- ci_link hyperlink in tests status detail ---
 
 func TestDispatchTestsStatusReleaseCILink(t *testing.T) {
-	hook := &captureHook{}
+	hook := &captureNotifier{}
 	if err := Dispatch(context.Background(), "test", "tests status plucky ubuntu", testArtefactsWithBuilds, "", hook, "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	// The FAILED Jenkins execution for 1001 has a ci_link; status cell must be a hyperlink.
 	if !strings.Contains(hook.last, "](https://platform-qa-jenkins") {
 		t.Errorf("expected Markdown CI link in FAILED status cell, got:\n%s", hook.last)
+	}
+}
+
+// --- keyword filtering (ported from mattermost/poller_test.go) ---
+
+func TestDispatchKeywordRequired(t *testing.T) {
+	hook := &captureNotifier{}
+	// With keyword set, a bare "help" (no keyword prefix) must be ignored.
+	if err := Dispatch(context.Background(), "test", "help", testArtefacts, "", hook, "@watchtower", nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if hook.last != "" {
+		t.Errorf("message without keyword should be ignored, got: %s", hook.last)
+	}
+}
+
+func TestDispatchKeywordStripped(t *testing.T) {
+	hook := &captureNotifier{}
+	// "@watchtower help" must route to the help handler.
+	if err := Dispatch(context.Background(), "test", "@watchtower help", testArtefacts, "", hook, "@watchtower", nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(hook.last, "builds status") {
+		t.Errorf("keyword-prefixed help should produce help output, got: %s", hook.last)
+	}
+}
+
+func TestDispatchKeywordCaseInsensitive(t *testing.T) {
+	hook := &captureNotifier{}
+	if err := Dispatch(context.Background(), "test", "@Watchtower builds status", testArtefacts, "", hook, "@watchtower", nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(hook.last, "noble") {
+		t.Errorf("keyword match should be case-insensitive, got: %s", hook.last)
+	}
+}
+
+func TestDispatchKeywordBareShowsHelp(t *testing.T) {
+	hook := &captureNotifier{}
+	// Just the keyword alone (no command) should show help.
+	if err := Dispatch(context.Background(), "test", "@watchtower", testArtefacts, "", hook, "@watchtower", nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(hook.last, "builds status") {
+		t.Errorf("bare keyword should show help, got: %s", hook.last)
+	}
+}
+
+func TestDispatchNoKeyword(t *testing.T) {
+	hook := &captureNotifier{}
+	// Empty keyword → every message is routed without filtering.
+	if err := Dispatch(context.Background(), "test", "help", testArtefacts, "", hook, "", nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(hook.last, "builds status") {
+		t.Errorf("empty keyword: help should still produce output, got: %s", hook.last)
+	}
+}
+
+func TestDispatchKeywordWithBuildsStatus(t *testing.T) {
+	hook := &captureNotifier{}
+	artefacts := []domain.Artefact{
+		{ID: 1, Release: "noble", Version: time.Now().UTC().Format("20060102")},
+	}
+	if err := Dispatch(context.Background(), "test", "@watchtower builds status", artefacts, "", hook, "@watchtower", nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(hook.last, "noble") {
+		t.Errorf("expected builds status output, got: %s", hook.last)
 	}
 }
