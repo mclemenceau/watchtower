@@ -7,25 +7,23 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mclemenceau/watchtower/internal/buildapi"
-	"github.com/mclemenceau/watchtower/internal/llm"
-	"github.com/mclemenceau/watchtower/internal/mattermost"
+	"github.com/mclemenceau/watchtower/internal/domain"
+	"github.com/mclemenceau/watchtower/internal/ports"
 	"github.com/mclemenceau/watchtower/internal/state"
-	"github.com/mclemenceau/watchtower/internal/testapi"
 )
 
 // Activities holds the dependencies injected at worker startup.
 type Activities struct {
-	Artefacts      buildapi.ArtefactClient
-	Tests          testapi.TestClient
-	Snapshot       *state.Snapshot
-	Hook           mattermost.WebhookClient
+	Artefacts      ports.ArtefactSource
+	Tests          ports.BuildSource
+	Snapshot       ports.SnapshotStore
+	Hook           ports.Notifier
+	LogFetcher     ports.LogFetcher
 	DefaultRelease string // pin status table to this release; empty = auto-detect
-	// TODO: wire LLM when log analysis is implemented
-	LLM llm.LLMClient
+	LLM            ports.LLMClient
 }
 
-func (a *Activities) FetchBuildStatus(ctx context.Context) ([]buildapi.Artefact, error) {
+func (a *Activities) FetchBuildStatus(ctx context.Context) ([]domain.Artefact, error) {
 	artefacts, err := a.Artefacts.FetchArtefacts(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("FetchBuildStatus: %w", err)
@@ -36,8 +34,8 @@ func (a *Activities) FetchBuildStatus(ctx context.Context) ([]buildapi.Artefact,
 // FetchTestExecutions enriches each artefact with its build/test execution data
 // by calling the Test Observer API once per artefact. Errors for individual
 // artefacts are logged and skipped rather than aborting the whole fetch.
-func (a *Activities) FetchTestExecutions(ctx context.Context, artefacts []buildapi.Artefact) ([]buildapi.Artefact, error) {
-	enriched := make([]buildapi.Artefact, len(artefacts))
+func (a *Activities) FetchTestExecutions(ctx context.Context, artefacts []domain.Artefact) ([]domain.Artefact, error) {
+	enriched := make([]domain.Artefact, len(artefacts))
 	copy(enriched, artefacts)
 	for i, art := range enriched {
 		builds, err := a.Tests.FetchBuilds(ctx, art.ID)
@@ -50,7 +48,7 @@ func (a *Activities) FetchTestExecutions(ctx context.Context, artefacts []builda
 	return enriched, nil
 }
 
-func (a *Activities) LoadSnapshot(_ context.Context) ([]buildapi.Artefact, error) {
+func (a *Activities) LoadSnapshot(_ context.Context) ([]domain.Artefact, error) {
 	artefacts, err := a.Snapshot.Read()
 	if err != nil {
 		return nil, fmt.Errorf("LoadSnapshot: %w", err)
@@ -58,7 +56,7 @@ func (a *Activities) LoadSnapshot(_ context.Context) ([]buildapi.Artefact, error
 	return artefacts, nil
 }
 
-func (a *Activities) SaveSnapshot(_ context.Context, artefacts []buildapi.Artefact) error {
+func (a *Activities) SaveSnapshot(_ context.Context, artefacts []domain.Artefact) error {
 	if err := a.Snapshot.Write(artefacts); err != nil {
 		return fmt.Errorf("SaveSnapshot: %w", err)
 	}
@@ -67,13 +65,13 @@ func (a *Activities) SaveSnapshot(_ context.Context, artefacts []buildapi.Artefa
 
 // FormatStatusTable renders a status table for the configured release.
 // If DefaultRelease is empty it falls back to auto-detecting the most active release.
-func (a *Activities) FormatStatusTable(_ context.Context, artefacts []buildapi.Artefact) (string, error) {
+func (a *Activities) FormatStatusTable(_ context.Context, artefacts []domain.Artefact) (string, error) {
 	release := a.DefaultRelease
 	if release == "" {
 		release = state.LatestRelease(artefacts)
 	}
 
-	var filtered []buildapi.Artefact
+	var filtered []domain.Artefact
 	for _, art := range artefacts {
 		if art.Release == release {
 			filtered = append(filtered, art)
@@ -94,12 +92,12 @@ func (a *Activities) FormatStatusTable(_ context.Context, artefacts []buildapi.A
 	sb.WriteString("|------|---------|---------|-----|--------|-----|\n")
 	for _, art := range filtered {
 		fmt.Fprintf(&sb, "| %s | %s | %s | %s | %s | %s |\n",
-			art.Name, art.OS, art.Release, buildapi.ImageAge(art.Version), buildapi.BuildStatus(art.Version), buildapi.LogCell(art.ImageURL))
+			art.Name, art.OS, art.Release, domain.ImageAge(art.Version), domain.BuildStatus(art.Version), domain.LogCell(art.ImageURL))
 	}
 	return sb.String(), nil
 }
 
-// NotifyChannel sends a message to the Mattermost channel (or stdout in simulation mode).
+// NotifyChannel sends a message to the notification channel.
 func (a *Activities) NotifyChannel(_ context.Context, text string) error {
 	if err := a.Hook.Send(text); err != nil {
 		return fmt.Errorf("NotifyChannel: %w", err)

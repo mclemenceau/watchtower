@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mclemenceau/watchtower/internal/buildapi"
+	"github.com/mclemenceau/watchtower/internal/domain"
 )
 
 func TestReadWriteRoundtrip(t *testing.T) {
@@ -21,7 +21,7 @@ func TestReadWriteRoundtrip(t *testing.T) {
 		t.Fatalf("expected nil, got %v", got)
 	}
 
-	artefacts := []buildapi.Artefact{
+	artefacts := []domain.Artefact{
 		{ID: 1001, Name: "noble-desktop-amd64.iso", Release: "noble", Version: "20260402", Status: "APPROVED"},
 	}
 	if err := s.Write(artefacts); err != nil {
@@ -41,7 +41,7 @@ func TestWriteIsAtomic(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "snapshot.json")
 	s := New(path)
 
-	if err := s.Write([]buildapi.Artefact{{ID: 1, Name: "a", Status: "APPROVED"}}); err != nil {
+	if err := s.Write([]domain.Artefact{{ID: 1, Name: "a", Status: "APPROVED"}}); err != nil {
 		t.Fatal(err)
 	}
 	// Temp file must be gone after a successful write.
@@ -51,8 +51,8 @@ func TestWriteIsAtomic(t *testing.T) {
 }
 
 func TestDiffNewFailure(t *testing.T) {
-	old := []buildapi.Artefact{{ID: 1, Name: "x", Status: "UNDECIDED"}}
-	fresh := []buildapi.Artefact{{ID: 1, Name: "x", Status: "MARKED_AS_FAILED"}}
+	old := []domain.Artefact{{ID: 1, Name: "x", Status: "UNDECIDED"}}
+	fresh := []domain.Artefact{{ID: 1, Name: "x", Status: "MARKED_AS_FAILED"}}
 
 	report := Diff(old, fresh)
 
@@ -68,8 +68,8 @@ func TestDiffNewFailure(t *testing.T) {
 }
 
 func TestDiffRecovery(t *testing.T) {
-	old := []buildapi.Artefact{{ID: 1, Name: "x", Status: "MARKED_AS_FAILED"}}
-	fresh := []buildapi.Artefact{{ID: 1, Name: "x", Status: "APPROVED"}}
+	old := []domain.Artefact{{ID: 1, Name: "x", Status: "MARKED_AS_FAILED"}}
+	fresh := []domain.Artefact{{ID: 1, Name: "x", Status: "APPROVED"}}
 
 	report := Diff(old, fresh)
 
@@ -82,8 +82,8 @@ func TestDiffRecovery(t *testing.T) {
 }
 
 func TestDiffOtherChange(t *testing.T) {
-	old := []buildapi.Artefact{{ID: 1, Name: "x", Status: "UNDECIDED"}}
-	fresh := []buildapi.Artefact{{ID: 1, Name: "x", Status: "APPROVED"}}
+	old := []domain.Artefact{{ID: 1, Name: "x", Status: "UNDECIDED"}}
+	fresh := []domain.Artefact{{ID: 1, Name: "x", Status: "APPROVED"}}
 
 	report := Diff(old, fresh)
 
@@ -93,8 +93,8 @@ func TestDiffOtherChange(t *testing.T) {
 }
 
 func TestDiffNewArtefact(t *testing.T) {
-	old := []buildapi.Artefact{}
-	fresh := []buildapi.Artefact{{ID: 999, Name: "brand-new", Status: "UNDECIDED"}}
+	old := []domain.Artefact{}
+	fresh := []domain.Artefact{{ID: 999, Name: "brand-new", Status: "UNDECIDED"}}
 
 	report := Diff(old, fresh)
 
@@ -107,7 +107,7 @@ func TestDiffNewArtefact(t *testing.T) {
 }
 
 func TestDiffNoChange(t *testing.T) {
-	artefacts := []buildapi.Artefact{
+	artefacts := []domain.Artefact{
 		{ID: 1, Name: "a", Status: "APPROVED"},
 		{ID: 2, Name: "b", Status: "MARKED_AS_FAILED"},
 	}
@@ -119,12 +119,12 @@ func TestDiffNoChange(t *testing.T) {
 }
 
 func TestDiffMixed(t *testing.T) {
-	old := []buildapi.Artefact{
+	old := []domain.Artefact{
 		{ID: 1, Name: "a", Status: "APPROVED"},
 		{ID: 2, Name: "b", Status: "MARKED_AS_FAILED"},
 		{ID: 3, Name: "c", Status: "UNDECIDED"},
 	}
-	fresh := []buildapi.Artefact{
+	fresh := []domain.Artefact{
 		{ID: 1, Name: "a", Status: "MARKED_AS_FAILED"}, // new failure
 		{ID: 2, Name: "b", Status: "APPROVED"},         // recovery
 		{ID: 3, Name: "c", Status: "UNDECIDED"},        // no change
@@ -148,7 +148,7 @@ func TestDiffMixed(t *testing.T) {
 }
 
 func TestLatestRelease(t *testing.T) {
-	artefacts := []buildapi.Artefact{
+	artefacts := []domain.Artefact{
 		{Release: "noble", Version: "20260402"},
 		{Release: "noble", Version: "20260401"},
 		{Release: "plucky", Version: "20260513"},
@@ -162,7 +162,7 @@ func TestLatestRelease(t *testing.T) {
 
 func TestLatestReleaseTiebreaker(t *testing.T) {
 	// Same date: release with more artefacts wins (more active).
-	artefacts := []buildapi.Artefact{
+	artefacts := []domain.Artefact{
 		{Release: "noble", Version: "20260513"},
 		{Release: "noble", Version: "20260513"},
 		{Release: "noble", Version: "20260513"},

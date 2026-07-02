@@ -4,14 +4,14 @@ import (
 	"context"
 	"testing"
 
-	"github.com/mclemenceau/watchtower/internal/buildapi"
-	"github.com/mclemenceau/watchtower/internal/llm"
+	"github.com/mclemenceau/watchtower/internal/adapters/openrouter"
+	"github.com/mclemenceau/watchtower/internal/domain"
 )
 
 func TestAnalyzeLogParsesJSON(t *testing.T) {
 	response := `{"category":"dependency","hypothesis":"apt cannot locate package libfoo-dev","log_excerpts":["E: Unable to locate package libfoo-dev"],"next_action":"Check apt sources.list for the plucky pocket"}`
 
-	act := &Activities{LLM: &llm.MockLLMClient{Response: response}}
+	act := &Activities{LLM: &openrouter.MockLLMClient{Response: response}}
 
 	result, err := act.AnalyzeLog(context.Background(), "ubuntu-server-amd64", "E: Unable to locate package libfoo-dev")
 	if err != nil {
@@ -35,7 +35,7 @@ func TestAnalyzeLogParsesJSON(t *testing.T) {
 func TestAnalyzeLogStripsCodeFence(t *testing.T) {
 	response := "```json\n{\"category\":\"infra\",\"hypothesis\":\"runner OOM\",\"log_excerpts\":[\"Killed\"],\"next_action\":\"retry on larger runner\"}\n```"
 
-	act := &Activities{LLM: &llm.MockLLMClient{Response: response}}
+	act := &Activities{LLM: &openrouter.MockLLMClient{Response: response}}
 
 	result, err := act.AnalyzeLog(context.Background(), "ubuntu-desktop-amd64", "Killed")
 	if err != nil {
@@ -47,7 +47,7 @@ func TestAnalyzeLogStripsCodeFence(t *testing.T) {
 }
 
 func TestAnalyzeLogInvalidJSON(t *testing.T) {
-	act := &Activities{LLM: &llm.MockLLMClient{Response: "not json at all"}}
+	act := &Activities{LLM: &openrouter.MockLLMClient{Response: "not json at all"}}
 
 	_, err := act.AnalyzeLog(context.Background(), "x", "log")
 	if err == nil {
@@ -67,12 +67,12 @@ func TestImageAge(t *testing.T) {
 		{"", true},
 	}
 	for _, tc := range cases {
-		got := buildapi.ImageAge(tc.version)
+		got := domain.ImageAge(tc.version)
 		if tc.wantErr && got != "unknown" {
-			t.Errorf("buildapi.ImageAge(%q) = %q, want %q", tc.version, got, "unknown")
+			t.Errorf("domain.ImageAge(%q) = %q, want %q", tc.version, got, "unknown")
 		}
 		if !tc.wantErr && got == "unknown" {
-			t.Errorf("buildapi.ImageAge(%q) returned %q unexpectedly", tc.version, got)
+			t.Errorf("domain.ImageAge(%q) returned %q unexpectedly", tc.version, got)
 		}
 	}
 }

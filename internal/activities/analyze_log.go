@@ -5,15 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-)
 
-// LogAnalysis is the structured output from AnalyzeLog.
-type LogAnalysis struct {
-	Category    string   `json:"category"` // infra|code|dependency|flaky|unknown
-	Hypothesis  string   `json:"hypothesis"`
-	LogExcerpts []string `json:"log_excerpts"`
-	NextAction  string   `json:"next_action"`
-}
+	"github.com/mclemenceau/watchtower/internal/domain"
+)
 
 const analyzeLogSystem = `You are a build failure analyst for Ubuntu image builds.
 Given a build log, identify the root cause of the failure.
@@ -25,17 +19,17 @@ Respond with valid JSON only — no markdown, no extra text:
   "next_action": "recommended next step for the engineer"
 }`
 
-func (a *Activities) AnalyzeLog(ctx context.Context, imageID, logContent string) (LogAnalysis, error) {
+func (a *Activities) AnalyzeLog(ctx context.Context, imageID, logContent string) (domain.LogAnalysis, error) {
 	prompt := fmt.Sprintf("Image: %s\n\nBuild log (last 200 lines):\n%s", imageID, logContent)
 
 	raw, err := a.LLM.Complete(ctx, analyzeLogSystem, prompt)
 	if err != nil {
-		return LogAnalysis{}, fmt.Errorf("AnalyzeLog: %w", err)
+		return domain.LogAnalysis{}, fmt.Errorf("AnalyzeLog: %w", err)
 	}
 
-	var result LogAnalysis
+	var result domain.LogAnalysis
 	if err := json.Unmarshal([]byte(stripCodeFence(raw)), &result); err != nil {
-		return LogAnalysis{}, fmt.Errorf("AnalyzeLog: parse response: %w", err)
+		return domain.LogAnalysis{}, fmt.Errorf("AnalyzeLog: parse response: %w", err)
 	}
 	return result, nil
 }
