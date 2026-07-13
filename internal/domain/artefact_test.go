@@ -261,6 +261,52 @@ func TestParseLaunchpadBuildURLs_VariantBuildLabels(t *testing.T) {
 	}
 }
 
+func TestParseLaunchpadBuildURLs_FlavourPrefix(t *testing.T) {
+	// Flavoured builds (edubuntu, xubuntu, kubuntu, etc.) use their own prefix.
+	// The leading "<flavour>-" must be stripped so callers match on the arch portion.
+	log := `edubuntu-arm64-raspi: https://launchpad.net/~ubuntu-cdimage/+livefs/ubuntu/resolute/edubuntu-preinstalled/+build/989883
+xubuntu-amd64: https://launchpad.net/~ubuntu-cdimage/+livefs/ubuntu/resolute/xubuntu/+build/989652
+`
+	got := ParseLaunchpadBuildURLs(log)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 entries, got %d: %v", len(got), got)
+	}
+	cases := []struct {
+		key  string
+		want string
+	}{
+		{"arm64-raspi", "https://launchpad.net/~ubuntu-cdimage/+livefs/ubuntu/resolute/edubuntu-preinstalled/+build/989883"},
+		{"amd64", "https://launchpad.net/~ubuntu-cdimage/+livefs/ubuntu/resolute/xubuntu/+build/989652"},
+	}
+	for _, tc := range cases {
+		if got[tc.key] != tc.want {
+			t.Errorf("key %q: got %q, want %q", tc.key, got[tc.key], tc.want)
+		}
+	}
+}
+
+// --- PrimaryBuildArch (composite arches) ---
+
+func TestPrimaryBuildArch_CompositeArm64(t *testing.T) {
+	// arm64+raspi should be preferred over alphabetical fallback
+	builds := []ArtefactBuild{
+		{Architecture: "arm64+raspi"},
+	}
+	if got := PrimaryBuildArch(builds); got != "arm64+raspi" {
+		t.Errorf("PrimaryBuildArch = %q, want %q", got, "arm64+raspi")
+	}
+}
+
+func TestPrimaryBuildArch_PrefersAMD64OverCompositeArm64(t *testing.T) {
+	builds := []ArtefactBuild{
+		{Architecture: "arm64+raspi"},
+		{Architecture: "amd64"},
+	}
+	if got := PrimaryBuildArch(builds); got != "amd64" {
+		t.Errorf("PrimaryBuildArch = %q, want %q", got, "amd64")
+	}
+}
+
 // --- PrimaryBuildArch ---
 
 func TestPrimaryBuildArch_PrefersAMD64(t *testing.T) {

@@ -269,15 +269,14 @@ func ParseLaunchpadBuildURLs(cdBuildLog string) map[string]string {
 	result := make(map[string]string)
 	for _, line := range strings.Split(cdBuildLog, "\n") {
 		line = strings.TrimSpace(line)
-		// Expected format: "ubuntu-{arch}: https://launchpad.net/..."
-		if !strings.HasPrefix(line, "ubuntu-") {
-			continue
-		}
+		// Expected format: "{flavour}-{arch}: https://launchpad.net/..."
+		// The flavour prefix may be "ubuntu", "edubuntu", "xubuntu", "kubuntu", etc.
+		// We match on the URL content rather than the prefix to stay flavour-agnostic.
 		colon := strings.Index(line, ": ")
 		if colon < 0 {
 			continue
 		}
-		arch := line[len("ubuntu-"):colon]
+		label := line[:colon]
 		url := strings.TrimSpace(line[colon+2:])
 		if !strings.HasPrefix(url, "https://launchpad.net/") {
 			continue
@@ -285,13 +284,19 @@ func ParseLaunchpadBuildURLs(cdBuildLog string) map[string]string {
 		if !strings.Contains(url, "/+build/") {
 			continue
 		}
-		result[arch] = url
+		// Strip the leading "<flavour>-" prefix from the label so that callers
+		// can match against the arch portion (e.g. "amd64", "arm64-raspi").
+		// The flavour prefix is everything up to and including the first "-".
+		if dash := strings.Index(label, "-"); dash >= 0 {
+			label = label[dash+1:]
+		}
+		result[label] = url
 	}
 	return result
 }
 
 // PrimaryBuildArch returns the architecture to investigate from a slice of
-// ArtefactBuilds. Preference order: amd64 > arm64 > first alphabetically.
+// ArtefactBuilds. Preference order: amd64 > arm64 (or arm64+variant) > first alphabetically.
 // Returns "" when builds is empty.
 func PrimaryBuildArch(builds []ArtefactBuild) string {
 	if len(builds) == 0 {
@@ -299,8 +304,9 @@ func PrimaryBuildArch(builds []ArtefactBuild) string {
 	}
 	for _, pref := range []string{"amd64", "arm64"} {
 		for _, b := range builds {
-			if b.Architecture == pref {
-				return pref
+			// Use HasPrefix so that composite arches like "arm64+raspi" match "arm64".
+			if b.Architecture == pref || strings.HasPrefix(b.Architecture, pref+"+") {
+				return b.Architecture
 			}
 		}
 	}
