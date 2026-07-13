@@ -3,6 +3,7 @@
 package ports_test
 
 import (
+	"github.com/mclemenceau/watchtower/internal/adapters/launchpad"
 	mattermostadapter "github.com/mclemenceau/watchtower/internal/adapters/mattermost"
 	"github.com/mclemenceau/watchtower/internal/adapters/openrouter"
 	"github.com/mclemenceau/watchtower/internal/adapters/testobserver"
@@ -26,3 +27,7 @@ var _ ports.ArtefactSource = (*testobserver.HTTPArtefactSource)(nil)
 var _ ports.BuildSource = (*testobserver.HTTPBuildSource)(nil)
 var _ ports.ArtefactSource = (*testobserver.MockArtefactSource)(nil)
 var _ ports.BuildSource = (*testobserver.MockBuildSource)(nil)
+
+// LaunchpadSource implementations.
+var _ ports.LaunchpadSource = (*launchpad.HTTPLaunchpadSource)(nil)
+var _ ports.LaunchpadSource = (*launchpad.MockLaunchpadSource)(nil)

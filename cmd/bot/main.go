@@ -1,6 +1,7 @@
 package main
 
 import (
+	"compress/gzip"
 	"context"
 	"flag"
 	"fmt"
@@ -8,12 +9,14 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/worker"
 
 	"github.com/mclemenceau/watchtower/internal/activities"
+	launchpadadapter "github.com/mclemenceau/watchtower/internal/adapters/launchpad"
 	mattermostadapter "github.com/mclemenceau/watchtower/internal/adapters/mattermost"
 	"github.com/mclemenceau/watchtower/internal/adapters/openrouter"
 	"github.com/mclemenceau/watchtower/internal/adapters/testobserver"
@@ -46,7 +49,28 @@ func (f *httpLogFetcher) Fetch(ctx context.Context, url string) (string, error) 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("LogFetcher: unexpected status %d", resp.StatusCode)
 	}
-	raw, err := io.ReadAll(resp.Body)
+
+	body := io.Reader(resp.Body)
+	// Decompress gzip responses when Go's transport has not already done so.
+	// resp.Uncompressed is true when Go's http.Transport transparently decompressed
+	// the body (e.g. Content-Encoding: gzip/x-gzip sent in response to the
+	// Transport's implicit Accept-Encoding: gzip). In that case the body is already
+	// plain text and we must NOT wrap it in a second gzip.Reader.
+	// When resp.Uncompressed is false, check URL suffix or Content-Type as a hint
+	// that the raw bytes are gzip and need manual decompression.
+	needsGzip := !resp.Uncompressed && (strings.HasSuffix(strings.ToLower(url), ".gz") ||
+		resp.Header.Get("Content-Type") == "application/x-gzip" ||
+		resp.Header.Get("Content-Type") == "application/gzip")
+	if needsGzip {
+		gr, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			return "", fmt.Errorf("LogFetcher: gzip open: %w", err)
+		}
+		defer gr.Close() //nolint:errcheck
+		body = gr
+	}
+
+	raw, err := io.ReadAll(body)
 	if err != nil {
 		return "", fmt.Errorf("LogFetcher: read: %w", err)
 	}
@@ -83,6 +107,7 @@ func main() {
 	buildSrc := testobserver.NewHTTPBuildSource(cfg.TestObserverURL)
 	snap := state.New("state/snapshot.json")
 	logFetcher := &httpLogFetcher{client: &http.Client{Timeout: 30 * time.Second}}
+	launchpadSrc := launchpadadapter.NewHTTPLaunchpadSource()
 
 	// Build optional LLM-backed intent resolver (disabled when API key is absent).
 	var resolver *intent.Resolver
@@ -151,10 +176,10 @@ func main() {
 		ChannelID: cfg.MattermostChannelID,
 		Interval:  cfg.MattermostPollInterval,
 		Keyword:   cfg.WatchtowerKeyword,
-	}, snap, cfg.DefaultRelease, notifier, nil, resolver)
+	}, snap, cfg.DefaultRelease, notifier, nil, resolver, logFetcher, llmClient, launchpadSrc)
 
 	// Run the interactive REPL — blocks until stdin is closed or Ctrl-D.
-	mattermostadapter.RunREPL(context.Background(), os.Stdin, notifier, snap, cfg.DefaultRelease, cfg.WatchtowerKeyword, resolver)
+	mattermostadapter.RunREPL(context.Background(), os.Stdin, notifier, snap, cfg.DefaultRelease, cfg.WatchtowerKeyword, resolver, logFetcher, llmClient, launchpadSrc)
 }
 
 func startCronWorkflows(c client.Client, cronSchedule string) {

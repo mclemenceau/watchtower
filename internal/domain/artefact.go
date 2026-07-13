@@ -255,3 +255,61 @@ func ExecStatusEmoji(status string) string {
 		return "⚠️"
 	}
 }
+
+// ParseLaunchpadBuildURLs scans a cd-build-log for lines of the form:
+//
+//	ubuntu-{label}: https://launchpad.net/~ubuntu-cdimage/+livefs/...
+//
+// and returns a map of label → Launchpad build page URL. The label is the
+// portion of the build name after "ubuntu-" (e.g. "amd64" for standard builds,
+// "desktop-preinstalled-arm64-raspi" for variant builds). Callers that need to
+// match by architecture should use substring matching against these labels.
+// Lines that do not match the pattern are silently ignored.
+func ParseLaunchpadBuildURLs(cdBuildLog string) map[string]string {
+	result := make(map[string]string)
+	for _, line := range strings.Split(cdBuildLog, "\n") {
+		line = strings.TrimSpace(line)
+		// Expected format: "ubuntu-{arch}: https://launchpad.net/..."
+		if !strings.HasPrefix(line, "ubuntu-") {
+			continue
+		}
+		colon := strings.Index(line, ": ")
+		if colon < 0 {
+			continue
+		}
+		arch := line[len("ubuntu-"):colon]
+		url := strings.TrimSpace(line[colon+2:])
+		if !strings.HasPrefix(url, "https://launchpad.net/") {
+			continue
+		}
+		if !strings.Contains(url, "/+build/") {
+			continue
+		}
+		result[arch] = url
+	}
+	return result
+}
+
+// PrimaryBuildArch returns the architecture to investigate from a slice of
+// ArtefactBuilds. Preference order: amd64 > arm64 > first alphabetically.
+// Returns "" when builds is empty.
+func PrimaryBuildArch(builds []ArtefactBuild) string {
+	if len(builds) == 0 {
+		return ""
+	}
+	for _, pref := range []string{"amd64", "arm64"} {
+		for _, b := range builds {
+			if b.Architecture == pref {
+				return pref
+			}
+		}
+	}
+	// Fall back to alphabetically first.
+	first := builds[0].Architecture
+	for _, b := range builds[1:] {
+		if b.Architecture < first {
+			first = b.Architecture
+		}
+	}
+	return first
+}

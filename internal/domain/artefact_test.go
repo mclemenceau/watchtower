@@ -187,7 +187,119 @@ func TestExecStatusEmoji(t *testing.T) {
 	}
 }
 
-// --- ImageAge ---
+// --- ParseLaunchpadBuildURLs ---
+
+func TestParseLaunchpadBuildURLs_TypicalLog(t *testing.T) {
+	log := `===== Building live filesystems =====
+ubuntu-amd64 on Launchpad starting at 2026-07-13 04:24:02
+ubuntu-amd64: https://launchpad.net/~ubuntu-cdimage/+livefs/ubuntu/stonking/ubuntu/+build/989764
+ubuntu-arm64: https://launchpad.net/~ubuntu-cdimage/+livefs/ubuntu/stonking/ubuntu/+build/989765
+ubuntu-riscv64: https://launchpad.net/~ubuntu-cdimage/+livefs/ubuntu/stonking/ubuntu/+build/989766
+ubuntu-amd64 on Launchpad finished at 2026-07-13 04:41:42 (Chroot problem)
+`
+	got := ParseLaunchpadBuildURLs(log)
+	if len(got) != 3 {
+		t.Fatalf("expected 3 entries, got %d: %v", len(got), got)
+	}
+	if got["amd64"] != "https://launchpad.net/~ubuntu-cdimage/+livefs/ubuntu/stonking/ubuntu/+build/989764" {
+		t.Errorf("amd64 URL mismatch: %q", got["amd64"])
+	}
+	if got["arm64"] != "https://launchpad.net/~ubuntu-cdimage/+livefs/ubuntu/stonking/ubuntu/+build/989765" {
+		t.Errorf("arm64 URL mismatch: %q", got["arm64"])
+	}
+	if got["riscv64"] != "https://launchpad.net/~ubuntu-cdimage/+livefs/ubuntu/stonking/ubuntu/+build/989766" {
+		t.Errorf("riscv64 URL mismatch: %q", got["riscv64"])
+	}
+}
+
+func TestParseLaunchpadBuildURLs_NoLinks(t *testing.T) {
+	log := "E: Some error\nFailed to build\n"
+	got := ParseLaunchpadBuildURLs(log)
+	if len(got) != 0 {
+		t.Errorf("expected empty map, got %v", got)
+	}
+}
+
+func TestParseLaunchpadBuildURLs_Empty(t *testing.T) {
+	got := ParseLaunchpadBuildURLs("")
+	if len(got) != 0 {
+		t.Errorf("expected empty map for empty input, got %v", got)
+	}
+}
+
+func TestParseLaunchpadBuildURLs_IgnoresNonLaunchpadLines(t *testing.T) {
+	log := `ubuntu-amd64: https://example.com/not-launchpad/+build/123
+ubuntu-arm64: https://launchpad.net/~ubuntu-cdimage/+livefs/ubuntu/stonking/ubuntu/+build/999
+ubuntu-riscv64: https://launchpad.net/~ubuntu-cdimage/no-build-keyword/path
+`
+	got := ParseLaunchpadBuildURLs(log)
+	// Only arm64 should match — amd64 is not launchpad.net, riscv64 has no /+build/
+	if len(got) != 1 {
+		t.Fatalf("expected 1 entry, got %d: %v", len(got), got)
+	}
+	if _, ok := got["arm64"]; !ok {
+		t.Errorf("expected arm64 in result, got %v", got)
+	}
+}
+
+func TestParseLaunchpadBuildURLs_VariantBuildLabels(t *testing.T) {
+	// Real-world log where the label is a full build name, not a bare arch.
+	log := "ubuntu-desktop-preinstalled-arm64-raspi: https://launchpad.net/~ubuntu-cdimage/+livefs/ubuntu/resolute/ubuntu-preinstalled/+build/989089\n"
+	got := ParseLaunchpadBuildURLs(log)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 entry, got %d: %v", len(got), got)
+	}
+	wantKey := "desktop-preinstalled-arm64-raspi"
+	if _, ok := got[wantKey]; !ok {
+		t.Errorf("expected key %q in result, got keys: %v", wantKey, func() []string {
+			keys := make([]string, 0, len(got))
+			for k := range got {
+				keys = append(keys, k)
+			}
+			return keys
+		}())
+	}
+}
+
+// --- PrimaryBuildArch ---
+
+func TestPrimaryBuildArch_PrefersAMD64(t *testing.T) {
+	builds := []ArtefactBuild{
+		{Architecture: "riscv64"},
+		{Architecture: "arm64"},
+		{Architecture: "amd64"},
+	}
+	if got := PrimaryBuildArch(builds); got != "amd64" {
+		t.Errorf("PrimaryBuildArch = %q, want %q", got, "amd64")
+	}
+}
+
+func TestPrimaryBuildArch_FallsBackToARM64(t *testing.T) {
+	builds := []ArtefactBuild{
+		{Architecture: "riscv64"},
+		{Architecture: "arm64"},
+	}
+	if got := PrimaryBuildArch(builds); got != "arm64" {
+		t.Errorf("PrimaryBuildArch = %q, want %q", got, "arm64")
+	}
+}
+
+func TestPrimaryBuildArch_AlphabeticalFallback(t *testing.T) {
+	builds := []ArtefactBuild{
+		{Architecture: "s390x"},
+		{Architecture: "ppc64el"},
+		{Architecture: "riscv64"},
+	}
+	if got := PrimaryBuildArch(builds); got != "ppc64el" {
+		t.Errorf("PrimaryBuildArch = %q, want %q (alphabetically first)", got, "ppc64el")
+	}
+}
+
+func TestPrimaryBuildArch_Empty(t *testing.T) {
+	if got := PrimaryBuildArch(nil); got != "" {
+		t.Errorf("PrimaryBuildArch(nil) = %q, want %q", got, "")
+	}
+}
 
 func TestImageAge(t *testing.T) {
 	cases := []struct {
