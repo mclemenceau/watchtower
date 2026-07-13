@@ -96,16 +96,20 @@ func BuildStatus(version string) string {
 	return "❌"
 }
 
-// LogCell returns a Markdown 🔗 hyperlink to the build log when imageURL is a
+// LogCell returns a Markdown 🔗 hyperlink to today's build log when imageURL is a
 // recognised cdimage.ubuntu.com URL, or ❌ when no log URL can be derived.
+// The URL always uses today's UTC date so that the link reflects the current day's
+// build attempt rather than the last known working build.
 func LogCell(imageURL string) string {
-	if logURL := LogURLFromImageURL(imageURL); logURL != "" {
+	today := time.Now().UTC().Format("20060102")
+	if logURL := LogURLFromImageURLForDate(imageURL, today); logURL != "" {
 		return fmt.Sprintf("[🔗](%s)", logURL)
 	}
 	return "❌"
 }
 
-// LogURLFromImageURL derives the cd-build-log URL from a cdimage.ubuntu.com image URL.
+// LogURLFromImageURL derives the cd-build-log URL from a cdimage.ubuntu.com image URL,
+// using the date embedded in that URL.
 //
 // The image URL is expected to follow the pattern:
 //
@@ -118,11 +122,11 @@ func LogCell(imageURL string) string {
 // Returns "" if imageURL is empty, the host is not cdimage.ubuntu.com, or the path
 // does not contain the required number of segments.
 func LogURLFromImageURL(imageURL string) string {
-	if imageURL == "" {
+	folder, release, logPrefix, ok := parseImageURLParts(imageURL)
+	if !ok {
 		return ""
 	}
-	// Strip scheme ("https://") and split on "/"
-	// Expected: ["", "", "cdimage.ubuntu.com", folder, release, log_prefix, date, filename]
+	// Extract and validate the date from the URL itself (parts[4]).
 	rest := imageURL
 	for _, prefix := range []string{"https://", "http://"} {
 		if strings.HasPrefix(rest, prefix) {
@@ -131,19 +135,7 @@ func LogURLFromImageURL(imageURL string) string {
 		}
 	}
 	parts := strings.SplitN(rest, "/", 8)
-	// parts[0]=host, parts[1]=folder, parts[2]=release, parts[3]=log_prefix, parts[4]=date, parts[5]=filename
-	if len(parts) < 6 {
-		return ""
-	}
-	host := parts[0]
-	if host != "cdimage.ubuntu.com" {
-		return ""
-	}
-	folder := parts[1]
-	release := parts[2]
-	logPrefix := parts[3]
 	date := parts[4]
-	// date must be a valid YYYYMMDD (8 digits); ignore respin suffix on the date segment
 	if i := strings.IndexByte(date, '.'); i != -1 {
 		date = date[:i]
 	}
@@ -156,6 +148,45 @@ func LogURLFromImageURL(imageURL string) string {
 		}
 	}
 	return fmt.Sprintf("%s/%s/%s/%s-%s.log", baseLogURL, folder, release, logPrefix, date)
+}
+
+// LogURLFromImageURLForDate derives the cd-build-log URL from a cdimage.ubuntu.com image
+// URL but substitutes the provided date (YYYYMMDD) in place of the date embedded in the
+// image URL. This is used to construct a log link for a specific date — typically today —
+// regardless of which build date the Test Observer API last reported.
+//
+// Returns "" if imageURL cannot be parsed (same conditions as LogURLFromImageURL).
+func LogURLFromImageURLForDate(imageURL, date string) string {
+	folder, release, logPrefix, ok := parseImageURLParts(imageURL)
+	if !ok {
+		return ""
+	}
+	return fmt.Sprintf("%s/%s/%s/%s-%s.log", baseLogURL, folder, release, logPrefix, date)
+}
+
+// parseImageURLParts extracts the (folder, release, logPrefix) structural components
+// from a cdimage.ubuntu.com image URL. Returns ok=false if the URL is empty, has the
+// wrong host, or has too few path segments.
+func parseImageURLParts(imageURL string) (folder, release, logPrefix string, ok bool) {
+	if imageURL == "" {
+		return "", "", "", false
+	}
+	rest := imageURL
+	for _, prefix := range []string{"https://", "http://"} {
+		if strings.HasPrefix(rest, prefix) {
+			rest = rest[len(prefix):]
+			break
+		}
+	}
+	// Expected: host / folder / release / log_prefix / date / filename
+	parts := strings.SplitN(rest, "/", 8)
+	if len(parts) < 6 {
+		return "", "", "", false
+	}
+	if parts[0] != "cdimage.ubuntu.com" {
+		return "", "", "", false
+	}
+	return parts[1], parts[2], parts[3], true
 }
 
 // ImageAge returns a human-readable age string for a YYYYMMDD or YYYYMMDD.N version field.

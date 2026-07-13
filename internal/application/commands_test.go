@@ -217,7 +217,9 @@ func TestDispatchBuildsStatusReleaseUnknown(t *testing.T) {
 
 func TestDispatchBuildsStatusReleaseLogLink(t *testing.T) {
 	imageURL := "https://cdimage.ubuntu.com/ubuntu-server/noble/daily-live/20200101/noble-live-server-amd64.iso"
-	logURL := "https://ubuntu-archive-team.ubuntu.com/cd-build-logs/ubuntu-server/noble/daily-live-20200101.log"
+	// LogCell always uses today's date, not the date embedded in imageURL.
+	todayDate := time.Now().UTC().Format("20060102")
+	logURL := "https://ubuntu-archive-team.ubuntu.com/cd-build-logs/ubuntu-server/noble/daily-live-" + todayDate + ".log"
 	artefacts := []domain.Artefact{
 		{ID: 1, Name: "ubuntu-server-amd64", OS: "ubuntu-server", Release: "noble", Version: "20200101", ImageURL: imageURL},
 		{ID: 2, Name: "ubuntu-desktop-amd64", OS: "ubuntu", Release: "noble", Version: "20200101"},

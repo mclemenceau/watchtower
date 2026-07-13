@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -70,14 +71,56 @@ func TestBuildStatus_NotBuilt(t *testing.T) {
 	}
 }
 
+// --- LogURLFromImageURLForDate ---
+
+func TestLogURLFromImageURLForDate_SubstitutesDate(t *testing.T) {
+	// An image URL with an old date; the returned log URL must use the supplied date.
+	imageURL := "https://cdimage.ubuntu.com/ubuntu-server/stonking/daily-live/20260415/stonking-live-server-amd64.iso"
+	want := "https://ubuntu-archive-team.ubuntu.com/cd-build-logs/ubuntu-server/stonking/daily-live-20261231.log"
+	if got := LogURLFromImageURLForDate(imageURL, "20261231"); got != want {
+		t.Errorf("LogURLFromImageURLForDate(%q, %q)\n got  %q\n want %q", imageURL, "20261231", got, want)
+	}
+}
+
+func TestLogURLFromImageURLForDate_Empty(t *testing.T) {
+	if got := LogURLFromImageURLForDate("", "20261231"); got != "" {
+		t.Errorf("LogURLFromImageURLForDate(%q, %q) = %q, want empty string", "", "20261231", got)
+	}
+}
+
+func TestLogURLFromImageURLForDate_WrongHost(t *testing.T) {
+	imageURL := "https://example.com/ubuntu-server/stonking/daily-live/20260415/stonking-live-server-amd64.iso"
+	if got := LogURLFromImageURLForDate(imageURL, "20261231"); got != "" {
+		t.Errorf("LogURLFromImageURLForDate with wrong host should return %q, got %q", "", got)
+	}
+}
+
 // --- LogCell ---
 
 func TestLogCell_WithURL(t *testing.T) {
+	// LogCell uses today's date regardless of the date embedded in the image URL.
 	imageURL := "https://cdimage.ubuntu.com/ubuntu-server/stonking/daily-live/20260415/stonking-live-server-amd64.iso"
-	logURL := "https://ubuntu-archive-team.ubuntu.com/cd-build-logs/ubuntu-server/stonking/daily-live-20260415.log"
-	want := "[🔗](" + logURL + ")"
+	today := time.Now().UTC().Format("20060102")
+	wantLogURL := "https://ubuntu-archive-team.ubuntu.com/cd-build-logs/ubuntu-server/stonking/daily-live-" + today + ".log"
+	want := "[🔗](" + wantLogURL + ")"
 	if got := LogCell(imageURL); got != want {
 		t.Errorf("LogCell(%q)\n got  %q\n want %q", imageURL, got, want)
+	}
+}
+
+func TestLogCell_UsesTodayNotEmbeddedDate(t *testing.T) {
+	// Explicitly verify that the log URL contains today's date, not the date in the image URL.
+	imageURL := "https://cdimage.ubuntu.com/ubuntu-server/stonking/daily-live/19990101/stonking-live-server-amd64.iso"
+	today := time.Now().UTC().Format("20060102")
+	got := LogCell(imageURL)
+	if got == "❌" {
+		t.Fatalf("LogCell(%q) = ❌, want a valid link", imageURL)
+	}
+	if !strings.Contains(got, today) {
+		t.Errorf("LogCell(%q)\n got  %q\n expected URL to contain today's date %q, not the embedded date 19990101", imageURL, got, today)
+	}
+	if strings.Contains(got, "19990101") {
+		t.Errorf("LogCell(%q)\n got  %q\n URL must not contain the old embedded date 19990101", imageURL, got)
 	}
 }
 
