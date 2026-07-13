@@ -52,7 +52,8 @@ type mmPost struct {
 // the status table to a release (empty = auto-detect).
 //
 // resolver is optional; pass nil to disable LLM-assisted intent resolution.
-func RunPoller(ctx context.Context, cfg PollerConfig, snap *state.Snapshot, defaultRelease string, notifier ports.Notifier, httpClient *http.Client, resolver *intent.Resolver) {
+// logFetcher, llm, and launchpad are optional; pass nil to disable the investigate command.
+func RunPoller(ctx context.Context, cfg PollerConfig, snap *state.Snapshot, defaultRelease string, notifier ports.Notifier, httpClient *http.Client, resolver *intent.Resolver, logFetcher ports.LogFetcher, llm ports.LLMClient, launchpad ports.LaunchpadSource) {
 	if cfg.Token == "" || cfg.ChannelID == "" || cfg.ServerURL == "" {
 		log.Print("mattermost poller: disabled (MATTERMOST_TOKEN, MATTERMOST_SERVER_URL, or MATTERMOST_CHANNEL_ID not set)")
 		return
@@ -111,7 +112,7 @@ func RunPoller(ctx context.Context, cfg PollerConfig, snap *state.Snapshot, defa
 				}
 				// Use channelID+userID as the session key for multi-turn clarification.
 				sessionID := cfg.ChannelID + ":" + post.UserId
-				if err := application.Dispatch(ctx, sessionID, cmd, artefacts, defaultRelease, notifier, "", resolver); err != nil {
+				if err := application.Dispatch(ctx, sessionID, cmd, artefacts, defaultRelease, notifier, "", resolver, logFetcher, llm, launchpad); err != nil {
 					log.Printf("mattermost poller: dispatch %q: %v", cmd, err)
 				}
 			}

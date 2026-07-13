@@ -100,11 +100,11 @@ func FormatBuildsStatusRelease(artefacts []domain.Artefact, release, product str
 		fmt.Fprintf(&sb, "**Build Status** · %s · %s\n\n",
 			release, time.Now().UTC().Format("2006-01-02 15:04 UTC"))
 	}
-	sb.WriteString("| Artefact | Product | Version | Age | Build | Log |\n")
-	sb.WriteString("|----------|---------|---------|-----|-------|-----|\n")
+	sb.WriteString("| ID | Artefact | Product | Version | Age | Build | Log |\n")
+	sb.WriteString("|----|----------|---------|---------|-----|-------|-----|\n")
 	for _, art := range filtered {
-		fmt.Fprintf(&sb, "| %s | %s | %s | %s | %s | %s |\n",
-			art.Name, art.OS, art.Version, domain.ImageAge(art.Version), domain.BuildStatus(art.Version), domain.LogCell(art.ImageURL))
+		fmt.Fprintf(&sb, "| %d | %s | %s | %s | %s | %s | %s |\n",
+			art.ID, art.Name, art.OS, art.Version, domain.ImageAge(art.Version), domain.BuildStatus(art.Version), domain.LogCell(art.ImageURL))
 	}
 	return sb.String()
 }
@@ -329,6 +329,26 @@ func FormatChangeReport(r domain.ChangeReport) string {
 	return sb.String()
 }
 
+// FormatInvestigation renders the LLM log analysis result for a single artefact.
+// source is a human-readable description of which log was analysed
+// (e.g. "Launchpad librarian (amd64)" or "cd-build-log").
+func FormatInvestigation(art domain.Artefact, analysis domain.LogAnalysis, source string) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "**Investigation — %s** (ID: %d) · %s\n\n",
+		art.Name, art.ID, time.Now().UTC().Format("2006-01-02 15:04 UTC"))
+	fmt.Fprintf(&sb, "**Log source:** %s\n", source)
+	fmt.Fprintf(&sb, "**Category:** %s\n", analysis.Category)
+	fmt.Fprintf(&sb, "**Hypothesis:** %s\n", analysis.Hypothesis)
+	if len(analysis.LogExcerpts) > 0 {
+		sb.WriteString("\n**Relevant log excerpts:**\n")
+		for _, line := range analysis.LogExcerpts {
+			fmt.Fprintf(&sb, "- `%s`\n", line)
+		}
+	}
+	fmt.Fprintf(&sb, "\n**Recommended action:** %s\n", analysis.NextAction)
+	return sb.String()
+}
+
 // HelpText returns the Markdown help message listing all available commands.
 func HelpText() string {
 	return `**Watchtower — available commands:**
@@ -336,11 +356,12 @@ func HelpText() string {
 | Command | Description |
 |---------|-------------|
 | ` + "`builds status`" + `                          | Build summary for all releases with progress bar |
-| ` + "`builds status <release>`" + `                | Detailed build status for a specific release |
+| ` + "`builds status <release>`" + `                | Detailed build status for a specific release (includes artefact IDs) |
 | ` + "`builds status <release> <product>`" + `      | Filter detail view to a single product |
 | ` + "`tests status`" + `                           | Test summary for all releases with progress bar |
 | ` + "`tests status <release>`" + `                 | Detailed test status for a specific release |
 | ` + "`tests status <release> <product>`" + `       | Filter test detail view to a single product |
+| ` + "`investigate <artefact-id>`" + `              | Fetch build log and run LLM root-cause analysis |
 | ` + "`help`" + `                                   | Show this message |
 
 Proactive change reports are posted automatically when build statuses change.`

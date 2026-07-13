@@ -79,7 +79,7 @@ func TestFormatBuildsStatusRelease_ColumnHeaders(t *testing.T) {
 		{ID: 1, Name: "ubuntu-desktop-amd64", OS: "ubuntu", Release: "noble", Version: today},
 	}
 	out := FormatBuildsStatusRelease(artefacts, "noble", "")
-	for _, want := range []string{"Artefact", "Product", "Version", "Age", "Build", "Log"} {
+	for _, want := range []string{"ID", "Artefact", "Product", "Version", "Age", "Build", "Log"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("FormatBuildsStatusRelease missing column header %q, got:\n%s", want, out)
 		}
@@ -347,5 +347,60 @@ func TestFormatChangeReport_EmptyReport(t *testing.T) {
 		if strings.Contains(out, section) {
 			t.Errorf("empty report should not contain section %q, got:\n%s", section, out)
 		}
+	}
+}
+
+// --- FormatInvestigation ---
+
+func TestFormatInvestigation_RequiredFields(t *testing.T) {
+	art := domain.Artefact{ID: 42, Name: "noble-desktop-amd64.iso", OS: "ubuntu", Release: "noble", Version: yesterday}
+	analysis := domain.LogAnalysis{
+		Category:    "dependency",
+		Hypothesis:  "apt mirror returned 404 for linux-image package",
+		LogExcerpts: []string{"E: Failed to fetch http://example.com 404", "dpkg: error processing package"},
+		NextAction:  "Retry the build after mirror sync",
+	}
+	out := FormatInvestigation(art, analysis, "Launchpad librarian (amd64)")
+
+	for _, want := range []string{
+		"noble-desktop-amd64.iso",
+		"42",
+		"dependency",
+		"apt mirror returned 404",
+		"E: Failed to fetch http://example.com 404",
+		"dpkg: error processing package",
+		"Retry the build after mirror sync",
+		"Category",
+		"Hypothesis",
+		"Recommended action",
+		"Log source:",
+		"Launchpad librarian (amd64)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("FormatInvestigation missing %q, got:\n%s", want, out)
+		}
+	}
+}
+
+func TestFormatInvestigation_NoLogExcerpts(t *testing.T) {
+	art := domain.Artefact{ID: 1, Name: "plucky-server-amd64.iso", OS: "ubuntu-server", Release: "plucky", Version: yesterday}
+	analysis := domain.LogAnalysis{
+		Category:    "unknown",
+		Hypothesis:  "Could not determine root cause",
+		LogExcerpts: nil,
+		NextAction:  "Investigate manually",
+	}
+	out := FormatInvestigation(art, analysis, "cd-build-log")
+	if !strings.Contains(out, "plucky-server-amd64.iso") {
+		t.Errorf("expected artefact name, got:\n%s", out)
+	}
+	if strings.Contains(out, "Relevant log excerpts") {
+		t.Errorf("should not include 'Relevant log excerpts' section when empty, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Investigate manually") {
+		t.Errorf("expected next action, got:\n%s", out)
+	}
+	if !strings.Contains(out, "cd-build-log") {
+		t.Errorf("expected source 'cd-build-log', got:\n%s", out)
 	}
 }

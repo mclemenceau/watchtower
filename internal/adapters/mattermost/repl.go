@@ -19,7 +19,8 @@ import (
 // release (empty = auto-detect from snapshot). keyword is the optional trigger
 // prefix (e.g. "@watchtower"); pass empty string to dispatch every line regardless
 // of prefix. resolver is optional; pass nil to disable LLM-assisted intent resolution.
-func RunREPL(ctx context.Context, in io.Reader, notifier ports.Notifier, snap *state.Snapshot, defaultRelease string, keyword string, resolver *intent.Resolver) {
+// logFetcher, llm, and launchpad are optional; pass nil to disable the investigate command.
+func RunREPL(ctx context.Context, in io.Reader, notifier ports.Notifier, snap *state.Snapshot, defaultRelease string, keyword string, resolver *intent.Resolver, logFetcher ports.LogFetcher, llm ports.LLMClient, launchpad ports.LaunchpadSource) {
 	fmt.Println("[Watchtower] Bot started. Type a message (Ctrl-D to quit):")
 	fmt.Print("you> ")
 
@@ -51,7 +52,7 @@ func RunREPL(ctx context.Context, in io.Reader, notifier ports.Notifier, snap *s
 			continue
 		}
 
-		if dispatchErr := application.Dispatch(ctx, "repl", line, artefacts, defaultRelease, notifier, keyword, resolver); dispatchErr != nil {
+		if dispatchErr := application.Dispatch(ctx, "repl", line, artefacts, defaultRelease, notifier, keyword, resolver, logFetcher, llm, launchpad); dispatchErr != nil {
 			fmt.Printf("[Watchtower] error: %v\n", dispatchErr)
 		}
 

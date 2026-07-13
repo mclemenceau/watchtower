@@ -5,6 +5,7 @@ package application
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/mclemenceau/watchtower/internal/domain"
@@ -28,7 +29,23 @@ import (
 // clarifying question. sessionID identifies the conversation (e.g. "repl" or
 // a channel+user composite) for multi-turn clarification. Pass a nil resolver
 // to keep the original "I didn't understand" behaviour.
-func Dispatch(ctx context.Context, sessionID, msg string, artefacts []domain.Artefact, defaultRelease string, notifier ports.Notifier, keyword string, resolver *intent.Resolver) error {
+//
+// logFetcher, llm, and launchpad are optional dependencies required only by the
+// `investigate` command. Pass nil to disable investigation (the command returns
+// a helpful error). launchpad enables two-hop Launchpad librarian log resolution;
+// when nil the command falls back to the cd-build-log.
+func Dispatch(
+	ctx context.Context,
+	sessionID, msg string,
+	artefacts []domain.Artefact,
+	defaultRelease string,
+	notifier ports.Notifier,
+	keyword string,
+	resolver *intent.Resolver,
+	logFetcher ports.LogFetcher,
+	llm ports.LLMClient,
+	launchpad ports.LaunchpadSource,
+) error {
 	msg = strings.TrimSpace(msg)
 	if msg == "" {
 		return nil
@@ -78,13 +95,20 @@ func Dispatch(ctx context.Context, sessionID, msg string, artefacts []domain.Art
 	case lower == "tests" || (strings.HasPrefix(lower, "tests") && len(parts) == 2):
 		return notifier.Send("Usage: `tests status` · `tests status <release>` · `tests status <release> <product>`")
 
+	case strings.HasPrefix(lower, "investigate ") && len(parts) == 2:
+		return investigateArtefact(ctx, parts[1], artefacts, logFetcher, llm, launchpad, notifier)
+
+	case lower == "investigate":
+		return notifier.Send("Usage: `investigate <artefact-id>` — use `builds status <release>` to find IDs")
+
 	default:
 		if resolver != nil {
 			res := resolver.Resolve(ctx, sessionID, msg)
 			switch res.Kind {
 			case intent.Dispatched:
 				// Re-dispatch with the resolved command; no further intent resolution.
-				return Dispatch(ctx, sessionID, res.Command, artefacts, defaultRelease, notifier, "", nil)
+				// logFetcher/llm/launchpad are nil — investigate cannot be invoked via intent resolver.
+				return Dispatch(ctx, sessionID, res.Command, artefacts, defaultRelease, notifier, "", nil, nil, nil, nil)
 			case intent.NeedsInfo:
 				return notifier.Send(res.Reply)
 			case intent.Failed:
@@ -93,4 +117,50 @@ func Dispatch(ctx context.Context, sessionID, msg string, artefacts []domain.Art
 		}
 		return notifier.Send(fmt.Sprintf("I didn't understand `%s`. Type `help` for available commands.", msg))
 	}
+}
+
+// investigateArtefact looks up the artefact by ID, resolves the best available
+// log (cd-build-log or Launchpad librarian via two-hop resolution), runs LLM
+// root-cause analysis, and sends a formatted investigation report.
+func investigateArtefact(
+	ctx context.Context,
+	idStr string,
+	artefacts []domain.Artefact,
+	logFetcher ports.LogFetcher,
+	llm ports.LLMClient,
+	launchpad ports.LaunchpadSource,
+	notifier ports.Notifier,
+) error {
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		return notifier.Send(fmt.Sprintf("Invalid artefact ID `%s` — must be a number. Use `builds status <release>` to find IDs.", idStr))
+	}
+
+	var art *domain.Artefact
+	for i := range artefacts {
+		if artefacts[i].ID == id {
+			art = &artefacts[i]
+			break
+		}
+	}
+	if art == nil {
+		return notifier.Send(fmt.Sprintf("Artefact ID `%d` not found in snapshot. Use `builds status <release>` to list available IDs.", id))
+	}
+
+	if logFetcher == nil || llm == nil {
+		return notifier.Send("Investigation requires an LLM — set OPENROUTER_API_KEY to enable.")
+	}
+
+	if domain.LogURLFromImageURL(art.ImageURL) == "" {
+		return notifier.Send(fmt.Sprintf("No log URL available for artefact **%s** (ID: %d) — image URL is missing or unrecognised.", art.Name, art.ID))
+	}
+
+	_ = notifier.Send(fmt.Sprintf("Fetching and analysing log for **%s** (ID: %d)…", art.Name, art.ID))
+
+	analysis, source, err := analyzeLog(ctx, *art, logFetcher, launchpad, llm)
+	if err != nil {
+		return notifier.Send(fmt.Sprintf("Investigation failed for **%s**: %s", art.Name, err.Error()))
+	}
+
+	return notifier.Send(FormatInvestigation(*art, analysis, source))
 }

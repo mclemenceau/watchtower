@@ -22,7 +22,7 @@ Watchtower runs two concurrent modes:
 | Mattermost I/O | Incoming webhooks (real) / stdout simulation (dev) |
 | State | `state/snapshot.json` — atomic write (tmp → rename), no database |
 
-> **TODO:** Log analysis via LLM (OpenRouter) will be added back in a future block.
+
 
 ## Architecture
 
@@ -66,8 +66,9 @@ Go interfaces defining what the application needs from the outside world:
 Protocol-agnostic command routing and response formatting. Imports only `domain`
 and `ports` — **never any adapter package**.
 
-- `commands.go` — `Dispatch(ctx, sessionID, msg, artefacts, defaultRelease, notifier, keyword, resolver)`: routes messages to handlers
-- `formatters.go` — pure `string`-returning functions: `FormatBuildsStatusSummary`, `FormatBuildsStatusRelease`, `FormatTestsStatusSummary`, `FormatTestsStatusRelease`, `FormatChangeReport`, `HelpText`
+- `commands.go` — `Dispatch(ctx, sessionID, msg, artefacts, defaultRelease, notifier, keyword, resolver, logFetcher, llm)`: routes messages to handlers
+- `formatters.go` — pure `string`-returning functions: `FormatBuildsStatusSummary`, `FormatBuildsStatusRelease`, `FormatTestsStatusSummary`, `FormatTestsStatusRelease`, `FormatChangeReport`, `FormatInvestigation`, `HelpText`
+- `loganalysis.go` — `analyzeLog` helper: fetches log via `LogFetcher`, calls LLM, returns `domain.LogAnalysis`
 
 ### Adapters layer — `internal/adapters/`
 
@@ -114,7 +115,8 @@ internal/
   application/
     commands.go        Dispatch — protocol-agnostic command router
     formatters.go      FormatBuildsStatus*, FormatTestsStatus*, FormatChangeReport,
-                       HelpText — pure string functions
+                       FormatInvestigation, HelpText — pure string functions
+    loganalysis.go     analyzeLog — fetch log + LLM root-cause analysis helper
     commands_test.go   All dispatch and keyword routing tests
     formatters_test.go Unit tests for all formatting functions
   adapters/
@@ -207,11 +209,12 @@ FetchBuildStatus → FetchTestExecutions → LoadSnapshot → Diff → SaveSnaps
 | Command | Response |
 |---------|----------|
 | `builds status` | Build summary for all releases with progress bar |
-| `builds status <release>` | Detailed build status for a specific release |
+| `builds status <release>` | Detailed build status for a specific release (includes artefact IDs) |
 | `builds status <release> <product>` | Filter detail view to a single product |
 | `tests status` | Test summary for all releases with progress bar |
 | `tests status <release>` | Detailed test status for a specific release |
 | `tests status <release> <product>` | Filter test detail view to a single product |
+| `investigate <artefact-id>` | Fetch build log and run LLM root-cause analysis (requires `OPENROUTER_API_KEY`) |
 | `help` | Available commands |
 | *(anything else)* | LLM intent resolution (if API key set) or "I didn't understand…" |
 

@@ -72,7 +72,7 @@ func TestRunPollerDispatchesKeywordPosts(t *testing.T) {
 		Keyword:   "@watchtower",
 	}
 
-	mattermostadapter.RunPoller(ctx, cfg, snap, "", hook, srv.Client(), nil)
+	mattermostadapter.RunPoller(ctx, cfg, snap, "", hook, srv.Client(), nil, nil, nil, nil)
 
 	// After the context expires the poller should have dispatched the "help" command.
 	if !strings.Contains(hook.last, "builds status") {
@@ -102,7 +102,7 @@ func TestRunPollerDisabledWhenNoCreds(t *testing.T) {
 		ChannelID: "ch",
 		Interval:  10 * time.Millisecond,
 		Keyword:   "@watchtower",
-	}, snap, "", hook, srv.Client(), nil)
+	}, snap, "", hook, srv.Client(), nil, nil, nil, nil)
 
 	if called {
 		t.Error("poller should not make HTTP calls when Token is missing")
