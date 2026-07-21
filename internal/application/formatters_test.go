@@ -404,3 +404,172 @@ func TestFormatInvestigation_NoLogExcerpts(t *testing.T) {
 		t.Errorf("expected source 'cd-build-log', got:\n%s", out)
 	}
 }
+
+// --- FormatScheduledSummary ---
+
+func TestFormatScheduledSummary_EmptySnapshot(t *testing.T) {
+	out := FormatScheduledSummary(nil, nil)
+	if !strings.Contains(out, "No snapshot") {
+		t.Errorf("expected 'No snapshot' message, got: %s", out)
+	}
+}
+
+func TestFormatScheduledSummary_AllBuiltToday(t *testing.T) {
+	artefacts := []domain.Artefact{
+		{ID: 1, Name: "noble-desktop-amd64.iso", OS: "ubuntu", Release: "noble", Version: today},
+		{ID: 2, Name: "noble-server-amd64.iso", OS: "ubuntu-server", Release: "noble", Version: today},
+	}
+	out := FormatScheduledSummary(artefacts, []string{"noble"})
+	if !strings.Contains(out, "noble") {
+		t.Errorf("expected release name 'noble', got:\n%s", out)
+	}
+	if !strings.Contains(out, "100%") {
+		t.Errorf("expected 100%%, got:\n%s", out)
+	}
+	if !strings.Contains(out, "2/2") {
+		t.Errorf("expected 2/2 built, got:\n%s", out)
+	}
+	// No failing artefacts → no failing line
+	if strings.Contains(out, "failing") {
+		t.Errorf("expected no failing line when all built, got:\n%s", out)
+	}
+}
+
+func TestFormatScheduledSummary_SomeFailing(t *testing.T) {
+	artefacts := []domain.Artefact{
+		{ID: 1, Name: "noble-desktop-amd64.iso", OS: "ubuntu", Release: "noble", Version: today},
+		{ID: 2, Name: "noble-server-amd64.iso", OS: "ubuntu-server", Release: "noble", Version: yesterday},
+		{ID: 3, Name: "noble-minimal-amd64.iso", OS: "ubuntu-minimal", Release: "noble", Version: yesterday},
+	}
+	out := FormatScheduledSummary(artefacts, []string{"noble"})
+	// Product names and arch in parentheses
+	if !strings.Contains(out, "ubuntu-server") {
+		t.Errorf("expected failing product 'ubuntu-server', got:\n%s", out)
+	}
+	if !strings.Contains(out, "ubuntu-minimal") {
+		t.Errorf("expected failing product 'ubuntu-minimal', got:\n%s", out)
+	}
+	if !strings.Contains(out, "(amd64)") {
+		t.Errorf("expected arch '(amd64)' for failing products, got:\n%s", out)
+	}
+	if !strings.Contains(out, "failing:") {
+		t.Errorf("expected 'failing:' line, got:\n%s", out)
+	}
+	// desktop was built today — should NOT appear in failing list
+	if strings.Contains(out, "ubuntu (") {
+		t.Errorf("built-today product should not appear in failing list, got:\n%s", out)
+	}
+}
+
+func TestFormatScheduledSummary_MultipleArchsPerProduct(t *testing.T) {
+	artefacts := []domain.Artefact{
+		{ID: 1, Name: "noble-desktop-amd64.iso", OS: "ubuntu", Release: "noble", Version: yesterday},
+		{ID: 2, Name: "noble-desktop-arm64.iso", OS: "ubuntu", Release: "noble", Version: yesterday},
+		{ID: 3, Name: "noble-desktop-riscv64.iso", OS: "ubuntu", Release: "noble", Version: today},
+	}
+	out := FormatScheduledSummary(artefacts, []string{"noble"})
+	// Both failing archs should appear in parentheses for the same product
+	if !strings.Contains(out, "amd64") {
+		t.Errorf("expected 'amd64' in failing archs, got:\n%s", out)
+	}
+	if !strings.Contains(out, "arm64") {
+		t.Errorf("expected 'arm64' in failing archs, got:\n%s", out)
+	}
+	// riscv64 was built today — should not appear
+	if strings.Contains(out, "riscv64") {
+		t.Errorf("built-today arch should not appear in failing list, got:\n%s", out)
+	}
+}
+
+func TestFormatScheduledSummary_ReleaseOrderRespected(t *testing.T) {
+	artefacts := []domain.Artefact{
+		{ID: 1, Name: "noble-desktop-amd64.iso", Release: "noble", Version: today},
+		{ID: 2, Name: "jammy-desktop-amd64.iso", Release: "jammy", Version: today},
+		{ID: 3, Name: "plucky-desktop-amd64.iso", Release: "plucky", Version: today},
+	}
+	// Request: plucky first, then noble — jammy not requested, should be absent.
+	out := FormatScheduledSummary(artefacts, []string{"plucky", "noble"})
+
+	pluckyPos := strings.Index(out, "plucky")
+	noblePos := strings.Index(out, "noble")
+	if pluckyPos < 0 || noblePos < 0 {
+		t.Fatalf("expected both releases in output, got:\n%s", out)
+	}
+	if pluckyPos > noblePos {
+		t.Errorf("plucky should appear before noble (env order), got:\n%s", out)
+	}
+	if strings.Contains(out, "jammy") {
+		t.Errorf("jammy should be absent when not in releases list, got:\n%s", out)
+	}
+}
+
+func TestFormatScheduledSummary_NilReleasesUsesAll(t *testing.T) {
+	artefacts := []domain.Artefact{
+		{ID: 1, Name: "noble-desktop-amd64.iso", Release: "noble", Version: today},
+		{ID: 2, Name: "jammy-desktop-amd64.iso", Release: "jammy", Version: yesterday},
+	}
+	out := FormatScheduledSummary(artefacts, nil)
+	if !strings.Contains(out, "noble") {
+		t.Errorf("expected 'noble' in output when releases=nil, got:\n%s", out)
+	}
+	if !strings.Contains(out, "jammy") {
+		t.Errorf("expected 'jammy' in output when releases=nil, got:\n%s", out)
+	}
+}
+
+func TestFormatScheduledSummary_UnknownReleaseSkipped(t *testing.T) {
+	artefacts := []domain.Artefact{
+		{ID: 1, Name: "noble-desktop-amd64.iso", Release: "noble", Version: today},
+	}
+	out := FormatScheduledSummary(artefacts, []string{"noble", "nonexistent"})
+	if strings.Contains(out, "nonexistent") {
+		t.Errorf("release not in snapshot should be silently skipped, got:\n%s", out)
+	}
+	if !strings.Contains(out, "noble") {
+		t.Errorf("expected 'noble' in output, got:\n%s", out)
+	}
+}
+
+func TestFormatScheduledSummary_ZeroPct(t *testing.T) {
+	artefacts := []domain.Artefact{
+		{ID: 1, Name: "noble-desktop-amd64.iso", OS: "ubuntu", Release: "noble", Version: yesterday},
+		{ID: 2, Name: "noble-server-amd64.iso", OS: "ubuntu-server", Release: "noble", Version: yesterday},
+	}
+	out := FormatScheduledSummary(artefacts, []string{"noble"})
+	if !strings.Contains(out, "0%") {
+		t.Errorf("expected 0%% when nothing built today, got:\n%s", out)
+	}
+	if !strings.Contains(out, "0/2") {
+		t.Errorf("expected 0/2 built, got:\n%s", out)
+	}
+	if !strings.Contains(out, "ubuntu (amd64)") {
+		t.Errorf("expected 'ubuntu (amd64)' in failing list, got:\n%s", out)
+	}
+	if !strings.Contains(out, "ubuntu-server (amd64)") {
+		t.Errorf("expected 'ubuntu-server (amd64)' in failing list, got:\n%s", out)
+	}
+}
+
+// --- archFromName ---
+
+func TestArchFromName(t *testing.T) {
+	cases := []struct {
+		name string
+		want string
+	}{
+		{"noble-desktop-amd64.iso", "amd64"},
+		{"noble-desktop-arm64.iso", "arm64"},
+		{"noble-desktop-riscv64.iso", "riscv64"},
+		{"noble-server-ppc64el.iso", "ppc64el"},
+		{"noble-server-s390x.iso", "s390x"},
+		{"noble-server-armhf.iso", "armhf"},
+		{"noble-server-i386.iso", "i386"},
+		{"noble-server-unknown-arch.iso", "unknown"},
+	}
+	for _, tc := range cases {
+		got := archFromName(tc.name)
+		if got != tc.want {
+			t.Errorf("archFromName(%q) = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}

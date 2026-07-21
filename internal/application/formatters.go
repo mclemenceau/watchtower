@@ -281,7 +281,104 @@ func FormatTestsStatusRelease(artefacts []domain.Artefact, release, product stri
 	return sb.String()
 }
 
-// FormatChangeReport renders a Markdown change report message from a ChangeReport.
+// FormatScheduledSummary renders the compact scheduled build summary posted to the
+// channel on the configured cron schedule. Each release gets one line showing the
+// build percentage; releases with failing artefacts list them grouped by product
+// with their failing architectures in parentheses.
+//
+//	stonking — 40% (8/20 built today)
+//	  - failing: ubuntu-desktop (amd64, arm64), ubuntu-base (riscv64)
+//
+// releases controls which releases to include and in which order. When nil or
+// empty, all releases present in artefacts are used (sorted alphabetically).
+// Artefacts are expected to be pre-filtered by the caller (e.g. SummaryForProducts
+// already applied).
+func FormatScheduledSummary(artefacts []domain.Artefact, releases []string) string {
+	if len(artefacts) == 0 {
+		return "No snapshot available yet — the first fetch is still in progress."
+	}
+
+	// Group artefacts by release.
+	byRelease := make(map[string][]domain.Artefact)
+	for _, art := range artefacts {
+		byRelease[art.Release] = append(byRelease[art.Release], art)
+	}
+
+	// Determine release order.
+	ordered := releases
+	if len(ordered) == 0 {
+		for r := range byRelease {
+			ordered = append(ordered, r)
+		}
+		sort.Strings(ordered)
+	}
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "**Build Summary** · %s\n\n", time.Now().UTC().Format("2006-01-02 15:04 UTC"))
+
+	any := false
+	for _, release := range ordered {
+		arts, ok := byRelease[release]
+		if !ok {
+			continue // release not in snapshot — skip silently
+		}
+		any = true
+
+		total := len(arts)
+		built := 0
+		// product → sorted list of failing arch strings
+		failingArchsByProduct := make(map[string][]string)
+		productOrder := []string{}
+
+		for _, art := range arts {
+			if domain.IsBuiltToday(art.Version) {
+				built++
+				continue
+			}
+			arch := archFromName(art.Name)
+			if _, seen := failingArchsByProduct[art.OS]; !seen {
+				productOrder = append(productOrder, art.OS)
+			}
+			failingArchsByProduct[art.OS] = append(failingArchsByProduct[art.OS], arch)
+		}
+
+		pct := 0
+		if total > 0 {
+			pct = built * 100 / total
+		}
+		fmt.Fprintf(&sb, "%s — %d%% (%d/%d built today)\n", release, pct, built, total)
+
+		if len(productOrder) > 0 {
+			sort.Strings(productOrder)
+			parts := make([]string, 0, len(productOrder))
+			for _, product := range productOrder {
+				archs := failingArchsByProduct[product]
+				sort.Strings(archs)
+				parts = append(parts, fmt.Sprintf("%s (%s)", product, strings.Join(archs, ", ")))
+			}
+			fmt.Fprintf(&sb, "  - failing: %s\n", strings.Join(parts, ", "))
+		}
+	}
+
+	if !any {
+		return "No data available for the configured releases."
+	}
+	return sb.String()
+}
+
+// archFromName extracts the CPU architecture token from an artefact name.
+// It scans the name for known arch strings and returns the first match.
+// Returns "unknown" when no known arch is found.
+func archFromName(name string) string {
+	// Order matters: longer/more-specific tokens before shorter ones
+	// (e.g. "riscv64" before any hypothetical "risc").
+	for _, arch := range []string{"amd64", "arm64", "riscv64", "ppc64el", "s390x", "armhf", "i386"} {
+		if strings.Contains(name, arch) {
+			return arch
+		}
+	}
+	return "unknown"
+}
 func FormatChangeReport(r domain.ChangeReport) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "**Change Report** · %s\n\n", time.Now().UTC().Format("2006-01-02 15:04 UTC"))
@@ -355,6 +452,7 @@ func HelpText() string {
 
 | Command | Description |
 |---------|-------------|
+| ` + "`summary`" + `                                 | Scheduled build summary (same as the automatic post) |
 | ` + "`builds status`" + `                          | Build summary for all releases with progress bar |
 | ` + "`builds status <release>`" + `                | Detailed build status for a specific release (includes artefact IDs) |
 | ` + "`builds status <release> <product>`" + `      | Filter detail view to a single product |
@@ -364,5 +462,5 @@ func HelpText() string {
 | ` + "`investigate <artefact-id>`" + `              | Fetch build log and run LLM root-cause analysis |
 | ` + "`help`" + `                                   | Show this message |
 
-Proactive change reports are posted automatically when build statuses change.`
+The scheduled build summary is posted automatically per SUMMARY_CRON_SCHEDULE.`
 }

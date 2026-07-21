@@ -133,20 +133,23 @@ func main() {
 	defer c.Close()
 
 	act := &activities.Activities{
-		Artefacts:      artefactSrc,
-		Tests:          buildSrc,
-		Snapshot:       snap,
-		Hook:           notifier,
-		LogFetcher:     logFetcher,
-		DefaultRelease: cfg.DefaultRelease,
-		LLM:            llmClient,
+		Artefacts:          artefactSrc,
+		Tests:              buildSrc,
+		Snapshot:           snap,
+		Hook:               notifier,
+		LogFetcher:         logFetcher,
+		DefaultRelease:     cfg.DefaultRelease,
+		SummaryForReleases: cfg.SummaryForReleases,
+		SummaryForProducts: cfg.SummaryForProducts,
+		LLM:                llmClient,
 	}
 
 	// Register and start the Temporal worker in the background.
 	w := worker.New(c, taskQueue, worker.Options{
 		WorkerStopTimeout: 0,
 	})
-	w.RegisterWorkflow(watchtowerworkflow.ChangeWatchWorkflow)
+	w.RegisterWorkflow(watchtowerworkflow.DataRefreshWorkflow)
+	w.RegisterWorkflow(watchtowerworkflow.SummaryPostWorkflow)
 	w.RegisterActivity(act)
 
 	go func() {
@@ -156,16 +159,18 @@ func main() {
 	}()
 
 	// Terminate any stale workflows whose types are no longer registered.
-	terminateStaleWorkflows(c, "status-table", "query")
+	terminateStaleWorkflows(c, "status-table", "query", "change-watch", "change-watch-init")
 
-	// Start cron workflow (idempotent — Temporal ignores if already running).
-	startCronWorkflows(c, cfg.CronSchedule)
+	// Start the two cron workflows (idempotent — Temporal ignores if already running).
+	startDataRefreshWorkflow(c, cfg.RefreshCronSchedule)
+	startSummaryPostWorkflow(c, cfg.SummaryCronSchedule)
 
 	// If the snapshot is empty (first boot), trigger an immediate fetch so
-	// commands work right away without waiting up to 10 min for the cron.
+	// commands work right away without waiting for the first cron tick.
 	triggerInitialFetch(c, snap)
 
-	log.Printf("bot started on task queue %q (temporal: %s)", taskQueue, cfg.TemporalHost)
+	log.Printf("bot started on task queue %q (temporal: %s, refresh: %s, summary: %s)",
+		taskQueue, cfg.TemporalHost, cfg.RefreshCronSchedule, cfg.SummaryCronSchedule)
 
 	// Start the Mattermost channel poller in the background (no-op when credentials are absent).
 	pollerCtx, cancelPoller := context.WithCancel(context.Background())
@@ -176,26 +181,43 @@ func main() {
 		ChannelID: cfg.MattermostChannelID,
 		Interval:  cfg.MattermostPollInterval,
 		Keyword:   cfg.WatchtowerKeyword,
-	}, snap, cfg.DefaultRelease, notifier, nil, resolver, logFetcher, llmClient, launchpadSrc)
+	}, snap, cfg.DefaultRelease, cfg.SummaryForProducts, cfg.SummaryForReleases, notifier, nil, resolver, logFetcher, llmClient, launchpadSrc)
 
 	// Run the interactive REPL — blocks until stdin is closed or Ctrl-D.
-	mattermostadapter.RunREPL(context.Background(), os.Stdin, notifier, snap, cfg.DefaultRelease, cfg.WatchtowerKeyword, resolver, logFetcher, llmClient, launchpadSrc)
+	mattermostadapter.RunREPL(context.Background(), os.Stdin, notifier, snap, cfg.DefaultRelease, cfg.SummaryForProducts, cfg.SummaryForReleases, cfg.WatchtowerKeyword, resolver, logFetcher, llmClient, launchpadSrc)
 }
 
-func startCronWorkflows(c client.Client, cronSchedule string) {
+func startDataRefreshWorkflow(c client.Client, cronSchedule string) {
 	_, err := c.ExecuteWorkflow(
 		context.Background(),
 		client.StartWorkflowOptions{
-			ID:           "change-watch",
+			ID:           "data-refresh",
 			TaskQueue:    taskQueue,
 			CronSchedule: cronSchedule,
 		},
-		watchtowerworkflow.ChangeWatchWorkflow,
+		watchtowerworkflow.DataRefreshWorkflow,
 	)
 	if err != nil {
-		log.Printf("note: change-watch cron start: %v", err)
+		log.Printf("note: data-refresh cron start: %v", err)
 	} else {
-		log.Printf("change-watch cron scheduled (%s)", cronSchedule)
+		log.Printf("data-refresh cron scheduled (%s)", cronSchedule)
+	}
+}
+
+func startSummaryPostWorkflow(c client.Client, cronSchedule string) {
+	_, err := c.ExecuteWorkflow(
+		context.Background(),
+		client.StartWorkflowOptions{
+			ID:           "summary-post",
+			TaskQueue:    taskQueue,
+			CronSchedule: cronSchedule,
+		},
+		watchtowerworkflow.SummaryPostWorkflow,
+	)
+	if err != nil {
+		log.Printf("note: summary-post cron start: %v", err)
+	} else {
+		log.Printf("summary-post cron scheduled (%s)", cronSchedule)
 	}
 }
 
@@ -213,7 +235,7 @@ func terminateStaleWorkflows(c client.Client, ids ...string) {
 	}
 }
 
-// triggerInitialFetch runs one ChangeWatchWorkflow synchronously if the snapshot
+// triggerInitialFetch runs one DataRefreshWorkflow synchronously if the snapshot
 // is empty or contains no test execution data (e.g. first boot after the tests
 // feature was added), so commands are usable immediately on first boot.
 func triggerInitialFetch(c client.Client, snap *state.Snapshot) {
@@ -233,10 +255,10 @@ func triggerInitialFetch(c client.Client, snap *state.Snapshot) {
 	run, err := c.ExecuteWorkflow(
 		context.Background(),
 		client.StartWorkflowOptions{
-			ID:        "change-watch-init",
+			ID:        "data-refresh-init",
 			TaskQueue: taskQueue,
 		},
-		watchtowerworkflow.ChangeWatchWorkflow,
+		watchtowerworkflow.DataRefreshWorkflow,
 	)
 	if err != nil {
 		log.Printf("note: initial fetch start: %v", err)
