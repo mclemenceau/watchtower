@@ -16,11 +16,13 @@ import (
 // RunREPL reads lines from in (simulating incoming Mattermost messages), dispatches
 // each to application.Dispatch, and sends replies via notifier. Blocks until in is
 // closed or ctx is cancelled. defaultRelease pins the status table to a specific
-// release (empty = auto-detect from snapshot). keyword is the optional trigger
+// release (empty = auto-detect from snapshot). summaryForProducts restricts all views
+// to those product/OS names (nil = all). summaryForReleases is the ordered release
+// list used by the `summary` command (nil = all). keyword is the optional trigger
 // prefix (e.g. "@watchtower"); pass empty string to dispatch every line regardless
 // of prefix. resolver is optional; pass nil to disable LLM-assisted intent resolution.
 // logFetcher, llm, and launchpad are optional; pass nil to disable the investigate command.
-func RunREPL(ctx context.Context, in io.Reader, notifier ports.Notifier, snap *state.Snapshot, defaultRelease string, keyword string, resolver *intent.Resolver, logFetcher ports.LogFetcher, llm ports.LLMClient, launchpad ports.LaunchpadSource) {
+func RunREPL(ctx context.Context, in io.Reader, notifier ports.Notifier, snap *state.Snapshot, defaultRelease string, summaryForProducts []string, summaryForReleases []string, keyword string, resolver *intent.Resolver, logFetcher ports.LogFetcher, llm ports.LLMClient, launchpad ports.LaunchpadSource) {
 	fmt.Println("[Watchtower] Bot started. Type a message (Ctrl-D to quit):")
 	fmt.Print("you> ")
 
@@ -52,7 +54,7 @@ func RunREPL(ctx context.Context, in io.Reader, notifier ports.Notifier, snap *s
 			continue
 		}
 
-		if dispatchErr := application.Dispatch(ctx, "repl", line, artefacts, defaultRelease, notifier, keyword, resolver, logFetcher, llm, launchpad); dispatchErr != nil {
+		if dispatchErr := application.Dispatch(ctx, "repl", line, artefacts, defaultRelease, summaryForProducts, summaryForReleases, notifier, keyword, resolver, logFetcher, llm, launchpad); dispatchErr != nil {
 			fmt.Printf("[Watchtower] error: %v\n", dispatchErr)
 		}
 

@@ -10,6 +10,8 @@ import (
 
 type Config struct {
 	DefaultRelease       string
+	SummaryForReleases   []string // ordered list of releases to include in the scheduled summary; empty = all
+	SummaryForProducts   []string // restrict summaries to these OS/product names; empty = all
 	TestObserverURL      string
 	TemporalHost         string
 	MattermostWebhookURL string // empty = stdout simulation
@@ -25,8 +27,9 @@ type Config struct {
 	OpenRouterAPIKey string
 	LLMModel         string
 
-	// Cron schedule for the change-watch workflow (standard cron syntax, default every 10 min)
-	CronSchedule string
+	// Cron schedules for the two background workflows
+	RefreshCronSchedule string // dataset refresh interval (default every 30 min)
+	SummaryCronSchedule string // when to post the scheduled build summary (default 07:00/15:00/23:00 UTC)
 }
 
 func Load() (*Config, error) {
@@ -42,6 +45,8 @@ func Load() (*Config, error) {
 	}
 	return &Config{
 		DefaultRelease:         os.Getenv("DEFAULT_RELEASE"), // empty = auto-detect from data
+		SummaryForReleases:     parseSummaryList(os.Getenv("SUMMARY_FOR_RELEASES")),
+		SummaryForProducts:     parseSummaryList(os.Getenv("SUMMARY_FOR_PRODUCTS")),
 		TestObserverURL:        envOrDefault("TEST_OBSERVER_URL", "https://tests-api.ubuntu.com"),
 		TemporalHost:           envOrDefault("TEMPORAL_HOST", "localhost:7233"),
 		MattermostWebhookURL:   os.Getenv("MATTERMOST_WEBHOOK_URL"), // empty = stdout simulation
@@ -52,7 +57,8 @@ func Load() (*Config, error) {
 		WatchtowerKeyword:      envOrDefault("WATCHTOWER_KEYWORD", "@watchtower"),
 		OpenRouterAPIKey:       os.Getenv("OPENROUTER_API_KEY"),
 		LLMModel:               envOrDefault("LLM_MODEL", "openai/gpt-4o-mini"),
-		CronSchedule:           envOrDefault("WATCHTOWER_CRON_SCHEDULE", "*/10 * * * *"),
+		RefreshCronSchedule:    envOrDefault("REFRESH_CRON_SCHEDULE", "*/30 * * * *"),
+		SummaryCronSchedule:    envOrDefault("SUMMARY_CRON_SCHEDULE", "0 7,15,23 * * *"),
 	}, nil
 }
 
@@ -76,6 +82,21 @@ func parseDurationEnv(key string, def time.Duration) (time.Duration, error) {
 		return 0, fmt.Errorf("config: %s=%q is not a valid duration: %w", key, v, err)
 	}
 	return d, nil
+}
+
+// parseSummaryList splits a comma-separated value into a slice of trimmed,
+// non-empty strings. Returns nil (= include all) when val is empty.
+func parseSummaryList(val string) []string {
+	if val == "" {
+		return nil
+	}
+	var out []string
+	for _, p := range strings.Split(val, ",") {
+		if t := strings.TrimSpace(p); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // loadDotEnv reads a .env file and sets any variable that is not already present

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mclemenceau/watchtower/internal/application"
 	"github.com/mclemenceau/watchtower/internal/domain"
 	"github.com/mclemenceau/watchtower/internal/ports"
 	"github.com/mclemenceau/watchtower/internal/state"
@@ -14,13 +15,15 @@ import (
 
 // Activities holds the dependencies injected at worker startup.
 type Activities struct {
-	Artefacts      ports.ArtefactSource
-	Tests          ports.BuildSource
-	Snapshot       ports.SnapshotStore
-	Hook           ports.Notifier
-	LogFetcher     ports.LogFetcher
-	DefaultRelease string // pin status table to this release; empty = auto-detect
-	LLM            ports.LLMClient
+	Artefacts          ports.ArtefactSource
+	Tests              ports.BuildSource
+	Snapshot           ports.SnapshotStore
+	Hook               ports.Notifier
+	LogFetcher         ports.LogFetcher
+	DefaultRelease     string   // pin status table to this release; empty = auto-detect
+	SummaryForReleases []string // ordered release list for scheduled summary; nil = all
+	SummaryForProducts []string // restrict summaries to these OS/product names; nil = all
+	LLM                ports.LLMClient
 }
 
 func (a *Activities) FetchBuildStatus(ctx context.Context) ([]domain.Artefact, error) {
@@ -73,9 +76,13 @@ func (a *Activities) FormatStatusTable(_ context.Context, artefacts []domain.Art
 
 	var filtered []domain.Artefact
 	for _, art := range artefacts {
-		if art.Release == release {
-			filtered = append(filtered, art)
+		if art.Release != release {
+			continue
 		}
+		if len(a.SummaryForProducts) > 0 && !containsSummaryProduct(a.SummaryForProducts, art.OS) {
+			continue
+		}
+		filtered = append(filtered, art)
 	}
 
 	sort.Slice(filtered, func(i, j int) bool {
@@ -103,4 +110,38 @@ func (a *Activities) NotifyChannel(_ context.Context, text string) error {
 		return fmt.Errorf("NotifyChannel: %w", err)
 	}
 	return nil
+}
+
+// PostSummary reads the current snapshot, applies the SummaryForReleases and
+// SummaryForProducts filters, formats the scheduled build summary, and posts it
+// to the notification channel.
+func (a *Activities) PostSummary(ctx context.Context) error {
+	artefacts, err := a.Snapshot.Read()
+	if err != nil {
+		return fmt.Errorf("PostSummary: read snapshot: %w", err)
+	}
+
+	// Apply product filter (same logic as Dispatch).
+	if len(a.SummaryForProducts) > 0 {
+		var filtered []domain.Artefact
+		for _, art := range artefacts {
+			if containsSummaryProduct(a.SummaryForProducts, art.OS) {
+				filtered = append(filtered, art)
+			}
+		}
+		artefacts = filtered
+	}
+
+	msg := application.FormatScheduledSummary(artefacts, a.SummaryForReleases)
+	return a.NotifyChannel(ctx, msg)
+}
+
+// containsSummaryProduct reports whether product (case-insensitive) is present in the list.
+func containsSummaryProduct(list []string, product string) bool {
+	for _, p := range list {
+		if strings.EqualFold(p, product) {
+			return true
+		}
+	}
+	return false
 }
