@@ -34,11 +34,20 @@ import (
 // `investigate` command. Pass nil to disable investigation (the command returns
 // a helpful error). launchpad enables two-hop Launchpad librarian log resolution;
 // when nil the command falls back to the cd-build-log.
+//
+// allowedProducts is an optional allow-list of product/OS names (case-insensitive).
+// When non-empty, artefacts whose OS is not in the list are excluded from all
+// summary and detail views. Pass nil to include all products.
+//
+// summaryForReleases is the ordered release list used by the `summary` command
+// (mirrors the SUMMARY_FOR_RELEASES env var). Pass nil to include all releases.
 func Dispatch(
 	ctx context.Context,
 	sessionID, msg string,
 	artefacts []domain.Artefact,
 	defaultRelease string,
+	summaryForProducts []string,
+	summaryForReleases []string,
 	notifier ports.Notifier,
 	keyword string,
 	resolver *intent.Resolver,
@@ -49,6 +58,19 @@ func Dispatch(
 	msg = strings.TrimSpace(msg)
 	if msg == "" {
 		return nil
+	}
+
+	// Apply the env-level product allow-list: filter out artefacts whose OS is
+	// not in the configured products list. This narrows all summary and detail
+	// views without affecting per-command product filters supplied by the user.
+	if len(summaryForProducts) > 0 {
+		var filtered []domain.Artefact
+		for _, art := range artefacts {
+			if summaryProductAllowed(summaryForProducts, art.OS) {
+				filtered = append(filtered, art)
+			}
+		}
+		artefacts = filtered
 	}
 
 	// Keyword filtering: if a keyword is configured, only process messages that
@@ -70,6 +92,9 @@ func Dispatch(
 	switch {
 	case lower == "help":
 		return notifier.Send(HelpText())
+
+	case lower == "summary":
+		return notifier.Send(FormatScheduledSummary(artefacts, summaryForReleases))
 
 	case lower == "builds status":
 		return notifier.Send(FormatBuildsStatusSummary(artefacts))
@@ -108,7 +133,7 @@ func Dispatch(
 			case intent.Dispatched:
 				// Re-dispatch with the resolved command; no further intent resolution.
 				// logFetcher/llm/launchpad are nil — investigate cannot be invoked via intent resolver.
-				return Dispatch(ctx, sessionID, res.Command, artefacts, defaultRelease, notifier, "", nil, nil, nil, nil)
+				return Dispatch(ctx, sessionID, res.Command, artefacts, defaultRelease, summaryForProducts, summaryForReleases, notifier, "", nil, nil, nil, nil)
 			case intent.NeedsInfo:
 				return notifier.Send(res.Reply)
 			case intent.Failed:
@@ -163,4 +188,14 @@ func investigateArtefact(
 	}
 
 	return notifier.Send(FormatInvestigation(*art, analysis, source))
+}
+
+// summaryProductAllowed reports whether product (case-insensitive) is in the allow-list.
+func summaryProductAllowed(list []string, product string) bool {
+	for _, p := range list {
+		if strings.EqualFold(p, product) {
+			return true
+		}
+	}
+	return false
 }
