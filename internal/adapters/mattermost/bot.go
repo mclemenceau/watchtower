@@ -457,7 +457,7 @@ func runBotSession(
 			cmd = post.Message
 		}
 		if cmd == "" {
-			cmd = "help"
+			cmd = "greet"
 		}
 
 		artefacts, err := snap.Read()

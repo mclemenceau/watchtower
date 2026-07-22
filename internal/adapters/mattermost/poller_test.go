@@ -218,45 +218,62 @@ func TestRunBotDispatchesKeywordMention(t *testing.T) {
 	}
 }
 
-// TestRunBotDispatchesMidSentenceMention verifies that the keyword is matched
-// anywhere in the message, not just at the start. e.g. "hello @watchtower help".
-func TestRunBotDispatchesMidSentenceMention(t *testing.T) {
-	var (
-		mu        sync.Mutex
-		postedMsg string
-	)
+// TestRunBotMidSentenceAndBareMentions covers two patterns:
+//   - keyword mid-sentence with a command after it: "hello @watchtower help"
+//   - keyword with nothing after it: "hello @watchtower" → greeting
+func TestRunBotMidSentenceAndBareMentions(t *testing.T) {
+	cases := []struct {
+		message  string
+		wantText string // substring expected in the bot's reply
+	}{
+		// Command follows keyword mid-sentence.
+		{"hello @watchtower help", "builds status"},
+		// Nothing after keyword — should get the greeting, not the help table.
+		{"hello @watchtower", "Watchtower"},
+		// Bare leading keyword — same greeting.
+		{"@watchtower", "Watchtower"},
+	}
 
-	srv := newTestServer(t,
-		func(conn *websocket.Conn) {
-			// Keyword appears mid-sentence — bot must still respond.
-			_ = conn.WriteJSON(postedEvent("ch1", "user42", "post-user-1", "", "hello @watchtower help"))
-		},
-		func(req map[string]string) {
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.message, func(t *testing.T) {
+			var (
+				mu        sync.Mutex
+				postedMsg string
+			)
+
+			srv := newTestServer(t,
+				func(conn *websocket.Conn) {
+					_ = conn.WriteJSON(postedEvent("ch1", "user42", "post-user-1", "", tc.message))
+				},
+				func(req map[string]string) {
+					mu.Lock()
+					postedMsg = req["message"]
+					mu.Unlock()
+				},
+			)
+			defer srv.Close()
+
+			snap := state.New(t.TempDir() + "/snap.json")
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			defer cancel()
+
+			mattermostadapter.RunBot(ctx, mattermostadapter.BotConfig{
+				ServerURL:      srv.URL,
+				Token:          "testtoken",
+				BotUserID:      "botuser",
+				Keyword:        "@watchtower",
+				ReconnectDelay: 10 * time.Millisecond,
+			}, snap, nil, "", nil, nil, nil, nil, nil, nil, nil, nil)
+
 			mu.Lock()
-			postedMsg = req["message"]
+			got := postedMsg
 			mu.Unlock()
-		},
-	)
-	defer srv.Close()
 
-	snap := state.New(t.TempDir() + "/snap.json")
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-
-	mattermostadapter.RunBot(ctx, mattermostadapter.BotConfig{
-		ServerURL:      srv.URL,
-		Token:          "testtoken",
-		BotUserID:      "botuser",
-		Keyword:        "@watchtower",
-		ReconnectDelay: 10 * time.Millisecond,
-	}, snap, nil, "", nil, nil, nil, nil, nil, nil, nil, nil)
-
-	mu.Lock()
-	got := postedMsg
-	mu.Unlock()
-
-	if !strings.Contains(got, "builds status") {
-		t.Errorf("expected help text in posted reply for mid-sentence mention, got: %q", got)
+			if !strings.Contains(got, tc.wantText) {
+				t.Errorf("message %q: expected reply to contain %q, got: %q", tc.message, tc.wantText, got)
+			}
+		})
 	}
 }
 
