@@ -286,8 +286,11 @@ func FormatTestsStatusRelease(artefacts []domain.Artefact, release, product stri
 // build percentage; releases with failing artefacts list them grouped by product
 // with their failing architectures in parentheses.
 //
-//	stonking — 40% (8/20 built today)
-//	  - failing: ubuntu-desktop (amd64, arm64), ubuntu-base (riscv64)
+//	**stonking — 40% (8/20 built today)**
+//
+//	failing:
+//	 - ubuntu-desktop (amd64, arm64)
+//	 - ubuntu-base (riscv64)
 //
 // releases controls which releases to include and in which order. When nil or
 // empty, all releases present in artefacts are used (sorted alphabetically).
@@ -346,17 +349,17 @@ func FormatScheduledSummary(artefacts []domain.Artefact, releases []string) stri
 		if total > 0 {
 			pct = built * 100 / total
 		}
-		fmt.Fprintf(&sb, "%s — %d%% (%d/%d built today)\n", release, pct, built, total)
+		fmt.Fprintf(&sb, "**%s — %d%% (%d/%d built today)**\n\n", release, pct, built, total)
 
 		if len(productOrder) > 0 {
 			sort.Strings(productOrder)
-			parts := make([]string, 0, len(productOrder))
+			sb.WriteString("failing:\n")
 			for _, product := range productOrder {
 				archs := failingArchsByProduct[product]
 				sort.Strings(archs)
-				parts = append(parts, fmt.Sprintf("%s (%s)", product, strings.Join(archs, ", ")))
+				fmt.Fprintf(&sb, " - %s (%s)\n", product, strings.Join(archs, ", "))
 			}
-			fmt.Fprintf(&sb, "  - failing: %s\n", strings.Join(parts, ", "))
+			sb.WriteString("\n")
 		}
 	}
 
