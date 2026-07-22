@@ -476,27 +476,25 @@ func runBotSession(
 			failureStore = make(domain.FailureStore)
 		}
 
-		// Build the notifier. Thread replies go back into the same thread;
-		// keyword mentions at channel root get a top-level reply.
+		// Build the notifier. All replies go into a thread:
+		// - If the triggering post is already inside a thread (RootID set),
+		//   reply into that existing thread.
+		// - If it is a new top-level message, reply into a thread rooted at
+		//   that message (post.ID becomes the thread root). This creates a
+		//   clean thread for every new @watchtower interaction.
 		channelN := NewChannelNotifier(cfg.ServerURL, cfg.Token, post.ChannelID)
 		var notifier ports.Notifier
-		if isThreadReply || post.RootID != "" {
-			// Reply inside the thread so the conversation stays together.
-			threadRoot := post.RootID
-			notifier = &ThreadNotifier{
-				channel: channelN,
-				rootID:  threadRoot,
-				onPost: func(postID string) {
-					registerPost(postID, threadRoot)
-				},
-			}
-		} else {
-			// Top-level mention: post a channel-level reply and track the new post
-			// so follow-up replies in the resulting thread are caught automatically.
-			notifier = &trackedChannelNotifier{
-				ChannelNotifier: channelN,
-				onPost:          func(postID string) { registerPost(postID, "") },
-			}
+		threadRoot := post.RootID
+		if threadRoot == "" {
+			// New top-level mention — root the thread at the user's post.
+			threadRoot = post.ID
+		}
+		notifier = &ThreadNotifier{
+			channel: channelN,
+			rootID:  threadRoot,
+			onPost: func(postID string) {
+				registerPost(postID, threadRoot)
+			},
 		}
 
 		// Session key: channelID+userID for multi-turn LLM clarification.
@@ -513,29 +511,6 @@ func runBotSession(
 			}
 		}(notifier, sessionID, cmd, failureStore)
 	}
-}
-
-// trackedChannelNotifier wraps ChannelNotifier and calls onPost with the
-// created post ID after each successful Send, so the session can register the
-// post as a known bot thread root.
-type trackedChannelNotifier struct {
-	*ChannelNotifier
-	onPost func(postID string)
-}
-
-// Compile-time interface check.
-var _ ports.Notifier = (*trackedChannelNotifier)(nil)
-
-// Send posts text and registers the resulting post ID with the session.
-func (t *trackedChannelNotifier) Send(text string) error {
-	postID, err := t.post(text, "")
-	if err != nil {
-		return err
-	}
-	if postID != "" && t.onPost != nil {
-		t.onPost(postID)
-	}
-	return nil
 }
 
 // buildWSURL converts an HTTP(S) server URL to its WebSocket equivalent
