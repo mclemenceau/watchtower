@@ -61,30 +61,76 @@ func NewChannelNotifier(serverURL, token, channelID string) *ChannelNotifier {
 type mmCreatePost struct {
 	ChannelID string `json:"channel_id"`
 	Message   string `json:"message"`
+	RootID    string `json:"root_id,omitempty"` // non-empty → post inside a thread
+}
+
+// mmCreatedPost is the subset of the Mattermost POST response we care about.
+type mmCreatedPost struct {
+	ID string `json:"id"`
 }
 
 // Send posts text to the configured Mattermost channel via the REST API.
+// It returns the ID of the created post so callers can track threads.
 func (n *ChannelNotifier) Send(text string) error {
-	payload, err := json.Marshal(mmCreatePost{ChannelID: n.channelID, Message: text})
+	_, err := n.post(text, "")
+	return err
+}
+
+// post is the internal implementation shared by Send and ThreadNotifier.Send.
+// rootID is empty for top-level posts and non-empty for thread replies.
+// Returns the ID of the created post.
+func (n *ChannelNotifier) post(text, rootID string) (string, error) {
+	payload, err := json.Marshal(mmCreatePost{ChannelID: n.channelID, Message: text, RootID: rootID})
 	if err != nil {
-		return fmt.Errorf("ChannelNotifier: marshal: %w", err)
+		return "", fmt.Errorf("ChannelNotifier: marshal: %w", err)
 	}
 	req, err := http.NewRequest(http.MethodPost, n.serverURL+"/api/v4/posts", bytes.NewReader(payload))
 	if err != nil {
-		return fmt.Errorf("ChannelNotifier: build request: %w", err)
+		return "", fmt.Errorf("ChannelNotifier: build request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+n.token)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := n.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("ChannelNotifier: post: %w", err)
+		return "", fmt.Errorf("ChannelNotifier: post: %w", err)
 	}
 	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
-		return fmt.Errorf("ChannelNotifier: mattermost returned %d: %s", resp.StatusCode, body)
+		return "", fmt.Errorf("ChannelNotifier: mattermost returned %d: %s", resp.StatusCode, body)
+	}
+
+	var created mmCreatedPost
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		// Non-fatal: we got a success status, we just can't track the post ID.
+		return "", nil
+	}
+	return created.ID, nil
+}
+
+// ThreadNotifier implements ports.Notifier and posts every message as a reply
+// inside an existing thread (root_id is fixed at construction time).
+type ThreadNotifier struct {
+	channel *ChannelNotifier
+	rootID  string
+	// onPost is called with each created post ID so the session can register it
+	// as a known bot thread root. May be nil.
+	onPost func(postID string)
+}
+
+// Compile-time interface check.
+var _ ports.Notifier = (*ThreadNotifier)(nil)
+
+// Send posts text as a reply inside the thread identified by rootID.
+func (t *ThreadNotifier) Send(text string) error {
+	postID, err := t.channel.post(text, t.rootID)
+	if err != nil {
+		return err
+	}
+	if postID != "" && t.onPost != nil {
+		t.onPost(postID)
 	}
 	return nil
 }
@@ -308,6 +354,23 @@ func runBotSession(
 	// mu guards conn writes from concurrent dispatch goroutines.
 	var mu sync.Mutex
 
+	// botThreads tracks post IDs the bot has sent during this session.
+	// A thread root ID present here means any reply in that thread should be
+	// answered — no keyword required.
+	var botThreads sync.Map // key: postID (string) → struct{}
+
+	// registerPost adds a post ID (and its root, if it is itself a reply) to
+	// the known-bot-thread set so future replies trigger a response.
+	registerPost := func(postID, rootID string) {
+		if postID != "" {
+			botThreads.Store(postID, struct{}{})
+		}
+		// Also register the root so replies at any depth match.
+		if rootID != "" {
+			botThreads.Store(rootID, struct{}{})
+		}
+	}
+
 	// cancelRead lets us stop the read loop when ctx is done.
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -347,35 +410,49 @@ func runBotSession(
 		}
 
 		// Ignore system messages and our own posts.
-		if post.Type != "" || post.UserID == cfg.BotUserID {
+		// When we see one of our own posts, register it so replies to it are tracked.
+		if post.Type != "" {
+			continue
+		}
+		if post.UserID == cfg.BotUserID {
+			registerPost(post.ID, post.RootID)
 			continue
 		}
 
 		lower := strings.ToLower(strings.TrimSpace(post.Message))
 
-		// React to:
-		//  1. Messages that start with the keyword (@watchtower ...)
-		//  2. Thread replies in a thread where the bot posted (RootID check would
-		//     require state; for now, accept any reply in a thread the bot is in
-		//     — we approximate by checking if this is a reply and the keyword is
-		//     mentioned anywhere in the message).
+		// Determine why (if at all) we should respond.
+		//
+		//  1. Keyword mention anywhere in the message — always triggers.
+		//  2. Reply inside a thread the bot is part of — triggers without keyword.
+		//     We look up the reply's root ID in botThreads. Mattermost sets
+		//     RootID on every reply; for the first reply to a top-level post,
+		//     RootID equals that post's ID.
 		isKeywordMention := strings.HasPrefix(lower, keyword)
-		isThreadReplyWithKeyword := post.RootID != "" && strings.Contains(lower, keyword)
+		_, inBotThread := botThreads.Load(post.RootID)
+		isThreadReply := post.RootID != "" && inBotThread
 
-		if !isKeywordMention && !isThreadReplyWithKeyword {
+		if !isKeywordMention && !isThreadReply {
 			continue
 		}
 
 		// Extract the command text.
+		// For keyword mentions: strip the keyword prefix.
+		// For bare thread replies: use the raw message — it will be routed through
+		// the LLM intent resolver (or the "I didn't understand" fallback).
 		var cmd string
 		if isKeywordMention {
 			cmd = strings.TrimSpace(post.Message[len(keyword):])
+			// Also strip keyword if it appears mid-message (e.g. thread reply + keyword).
+			if cmd == "" && isThreadReply {
+				cmd = post.Message
+			}
 		} else {
-			// Thread reply: strip the keyword wherever it appears.
-			cmd = strings.TrimSpace(strings.ReplaceAll(post.Message, keyword, ""))
-			// Also strip the original-case version.
-			cmd = strings.TrimSpace(strings.ReplaceAll(cmd, cfg.Keyword, ""))
+			cmd = post.Message
 		}
+		// Strip keyword from cmd regardless (covers keyword-in-thread-reply case).
+		cmd = strings.TrimSpace(strings.ReplaceAll(cmd, keyword, ""))
+		cmd = strings.TrimSpace(strings.ReplaceAll(cmd, cfg.Keyword, ""))
 		if cmd == "" {
 			cmd = "help"
 		}
@@ -386,13 +463,33 @@ func runBotSession(
 			continue
 		}
 
-		// Build a per-channel notifier so the response goes back to the right place.
-		channelNotifier := NewChannelNotifier(cfg.ServerURL, cfg.Token, post.ChannelID)
+		// Build the notifier. Thread replies go back into the same thread;
+		// keyword mentions at channel root get a top-level reply.
+		channelN := NewChannelNotifier(cfg.ServerURL, cfg.Token, post.ChannelID)
+		var notifier ports.Notifier
+		if isThreadReply || post.RootID != "" {
+			// Reply inside the thread so the conversation stays together.
+			threadRoot := post.RootID
+			notifier = &ThreadNotifier{
+				channel: channelN,
+				rootID:  threadRoot,
+				onPost: func(postID string) {
+					registerPost(postID, threadRoot)
+				},
+			}
+		} else {
+			// Top-level mention: post a channel-level reply and track the new post
+			// so follow-up replies in the resulting thread are caught automatically.
+			notifier = &trackedChannelNotifier{
+				ChannelNotifier: channelN,
+				onPost:          func(postID string) { registerPost(postID, "") },
+			}
+		}
 
 		// Session key: channelID+userID for multi-turn LLM clarification.
 		sessionID := post.ChannelID + ":" + post.UserID
 
-		go func(p wsPost, n ports.Notifier, sid, command string) {
+		go func(n ports.Notifier, sid, command string) {
 			if err := application.Dispatch(
 				ctx, sid, command, artefacts,
 				defaultRelease, summaryForProducts, summaryForReleases,
@@ -400,8 +497,31 @@ func runBotSession(
 			); err != nil {
 				log.Printf("mattermost bot: dispatch %q: %v", command, err)
 			}
-		}(post, channelNotifier, sessionID, cmd)
+		}(notifier, sessionID, cmd)
 	}
+}
+
+// trackedChannelNotifier wraps ChannelNotifier and calls onPost with the
+// created post ID after each successful Send, so the session can register the
+// post as a known bot thread root.
+type trackedChannelNotifier struct {
+	*ChannelNotifier
+	onPost func(postID string)
+}
+
+// Compile-time interface check.
+var _ ports.Notifier = (*trackedChannelNotifier)(nil)
+
+// Send posts text and registers the resulting post ID with the session.
+func (t *trackedChannelNotifier) Send(text string) error {
+	postID, err := t.post(text, "")
+	if err != nil {
+		return err
+	}
+	if postID != "" && t.onPost != nil {
+		t.onPost(postID)
+	}
+	return nil
 }
 
 // buildWSURL converts an HTTP(S) server URL to its WebSocket equivalent
