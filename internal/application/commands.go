@@ -150,6 +150,9 @@ func Dispatch(
 
 	default:
 		if resolver != nil {
+			// Send an immediate acknowledgement so the user knows the bot is working.
+			// Free-text intent resolution involves an LLM call that can take several seconds.
+			_ = notifier.Send("_thinking…_")
 			res := resolver.Resolve(ctx, sessionID, msg)
 			switch res.Kind {
 			case intent.Dispatched:
