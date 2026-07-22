@@ -52,12 +52,6 @@ func (f *httpLogFetcher) Fetch(ctx context.Context, url string) (string, error) 
 
 	body := io.Reader(resp.Body)
 	// Decompress gzip responses when Go's transport has not already done so.
-	// resp.Uncompressed is true when Go's http.Transport transparently decompressed
-	// the body (e.g. Content-Encoding: gzip/x-gzip sent in response to the
-	// Transport's implicit Accept-Encoding: gzip). In that case the body is already
-	// plain text and we must NOT wrap it in a second gzip.Reader.
-	// When resp.Uncompressed is false, check URL suffix or Content-Type as a hint
-	// that the raw bytes are gzip and need manual decompression.
 	needsGzip := !resp.Uncompressed && (strings.HasSuffix(strings.ToLower(url), ".gz") ||
 		resp.Header.Get("Content-Type") == "application/x-gzip" ||
 		resp.Header.Get("Content-Type") == "application/gzip")
@@ -88,19 +82,23 @@ func main() {
 
 	cfg, err := config.Load()
 	if err != nil {
-		// Always print fatal config errors regardless of verbosity.
 		fmt.Fprintf(os.Stderr, "config: %s\n", err.Error())
 		os.Exit(1)
 	}
 
-	// Select notifier: real Mattermost webhook or stdout simulation.
+	// Select notifier for proactive summaries (broadcast to all joined channels).
+	// Falls back to stdout when Mattermost credentials are absent.
 	var notifier ports.Notifier
-	if cfg.MattermostWebhookURL != "" {
-		notifier = mattermostadapter.NewHTTPNotifier(cfg.MattermostWebhookURL)
-		log.Printf("mattermost webhook: %s", cfg.MattermostWebhookURL)
+	if cfg.MattermostServerURL != "" && cfg.MattermostBotToken != "" && cfg.MattermostBotUserID != "" {
+		notifier = mattermostadapter.NewBroadcastNotifier(
+			cfg.MattermostServerURL,
+			cfg.MattermostBotToken,
+			cfg.MattermostBotUserID,
+		)
+		log.Printf("mattermost bot: broadcast notifier active (%s)", cfg.MattermostServerURL)
 	} else {
 		notifier = &mattermostadapter.StdoutNotifier{}
-		log.Print("mattermost webhook: stdout simulation (set MATTERMOST_WEBHOOK_URL for real Mattermost)")
+		log.Print("mattermost bot: stdout simulation (set MATTERMOST_SERVER_URL, MATTERMOST_BOT_TOKEN, MATTERMOST_BOT_USER_ID for real Mattermost)")
 	}
 
 	artefactSrc := testobserver.NewHTTPArtefactSource(cfg.TestObserverURL)
@@ -120,7 +118,7 @@ func main() {
 		log.Print("intent resolver: disabled (set OPENROUTER_API_KEY to enable)")
 	}
 
-	// Connect to Temporal. Pass a no-op logger to suppress SDK output.
+	// Connect to Temporal.
 	temporalLogger := newTemporalLogger(*verbose)
 	c, err := client.Dial(client.Options{
 		HostPort: cfg.TemporalHost,
@@ -165,25 +163,38 @@ func main() {
 	startDataRefreshWorkflow(c, cfg.RefreshCronSchedule)
 	startSummaryPostWorkflow(c, cfg.SummaryCronSchedule)
 
-	// If the snapshot is empty (first boot), trigger an immediate fetch so
-	// commands work right away without waiting for the first cron tick.
+	// If the snapshot is empty (first boot), trigger an immediate fetch.
 	triggerInitialFetch(c, snap)
 
 	log.Printf("bot started on task queue %q (temporal: %s, refresh: %s, summary: %s)",
 		taskQueue, cfg.TemporalHost, cfg.RefreshCronSchedule, cfg.SummaryCronSchedule)
 
-	// Start the Mattermost channel poller in the background (no-op when credentials are absent).
-	pollerCtx, cancelPoller := context.WithCancel(context.Background())
-	defer cancelPoller()
-	go mattermostadapter.RunPoller(pollerCtx, mattermostadapter.PollerConfig{
-		ServerURL: cfg.MattermostServerURL,
-		Token:     cfg.MattermostToken,
-		ChannelID: cfg.MattermostChannelID,
-		Interval:  cfg.MattermostPollInterval,
-		Keyword:   cfg.WatchtowerKeyword,
-	}, snap, cfg.DefaultRelease, cfg.SummaryForProducts, cfg.SummaryForReleases, notifier, nil, resolver, logFetcher, llmClient, launchpadSrc)
+	// Start the Mattermost WebSocket bot in the background.
+	// It will reconnect automatically on disconnect.
+	botCtx, cancelBot := context.WithCancel(context.Background())
+	defer cancelBot()
+	go mattermostadapter.RunBot(
+		botCtx,
+		mattermostadapter.BotConfig{
+			ServerURL:      cfg.MattermostServerURL,
+			Token:          cfg.MattermostBotToken,
+			BotUserID:      cfg.MattermostBotUserID,
+			Keyword:        cfg.WatchtowerKeyword,
+			ReconnectDelay: cfg.MattermostReconnectDelay,
+		},
+		snap,
+		cfg.DefaultRelease,
+		cfg.SummaryForProducts,
+		cfg.SummaryForReleases,
+		nil, // httpClient — bot.go will use its own default
+		resolver,
+		logFetcher,
+		llmClient,
+		launchpadSrc,
+	)
 
 	// Run the interactive REPL — blocks until stdin is closed or Ctrl-D.
+	// In production the REPL simply echoes to stdout; the bot handles Mattermost.
 	mattermostadapter.RunREPL(context.Background(), os.Stdin, notifier, snap, cfg.DefaultRelease, cfg.SummaryForProducts, cfg.SummaryForReleases, cfg.WatchtowerKeyword, resolver, logFetcher, llmClient, launchpadSrc)
 }
 
@@ -222,8 +233,7 @@ func startSummaryPostWorkflow(c client.Client, cronSchedule string) {
 }
 
 // terminateStaleWorkflows terminates workflows by ID that are no longer
-// supported by this version of the bot (e.g. removed workflow types).
-// Errors are logged and ignored — the workflow may already be gone.
+// supported by this version of the bot.
 func terminateStaleWorkflows(c client.Client, ids ...string) {
 	for _, id := range ids {
 		err := c.TerminateWorkflow(context.Background(), id, "", "workflow type removed in bot redesign")
@@ -236,14 +246,12 @@ func terminateStaleWorkflows(c client.Client, ids ...string) {
 }
 
 // triggerInitialFetch runs one DataRefreshWorkflow synchronously if the snapshot
-// is empty or contains no test execution data (e.g. first boot after the tests
-// feature was added), so commands are usable immediately on first boot.
+// is empty or contains no test execution data.
 func triggerInitialFetch(c client.Client, snap *state.Snapshot) {
 	artefacts, err := snap.Read()
 	if err != nil {
-		return // unreadable — don't block
+		return
 	}
-	// Skip if snapshot is already fully populated (has artefacts with builds).
 	if len(artefacts) > 0 && hasTestData(artefacts) {
 		return
 	}

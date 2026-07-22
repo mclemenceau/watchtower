@@ -19,7 +19,7 @@ Watchtower runs two concurrent modes:
 | Language | Go 1.21+ |
 | Workflow orchestration | Temporal (`temporalio/auto-setup`) |
 | Pipeline data | Ubuntu Test Observer API (`https://tests-api.ubuntu.com`) |
-| Mattermost I/O | Incoming webhooks (real) / stdout simulation (dev) |
+| Mattermost I/O | Bot account + WebSocket API (real) / stdout simulation (dev) |
 | State | `state/snapshot.json` — atomic write (tmp → rename), no database |
 
 
@@ -77,7 +77,7 @@ Concrete implementations of ports. Each sub-package targets one external system:
 | Package | Implements | Notes |
 |---------|-----------|-------|
 | `adapters/testobserver/` | `ArtefactSource`, `BuildSource` | HTTP + Mock |
-| `adapters/mattermost/` | `Notifier` + RunREPL/RunPoller | HTTP + Stdout |
+| `adapters/mattermost/` | `Notifier` + RunREPL/RunBot | WebSocket bot + Stdout |
 | `adapters/openrouter/` | `LLMClient` | HTTP + Mock |
 
 **Adding a new messaging protocol** (e.g. Matrix): implement `ports.Notifier`
@@ -206,27 +206,37 @@ FetchBuildStatus → FetchTestExecutions → LoadSnapshot → Diff → SaveSnaps
 
 ### Reactive (user-triggered)
 
+Users interact by @-mentioning the bot in any channel it has joined, or by
+replying in a thread that already contains the bot's keyword:
+
 | Command | Response |
 |---------|----------|
-| `builds status` | Build summary for all releases with progress bar |
-| `builds status <release>` | Detailed build status for a specific release (includes artefact IDs) |
-| `builds status <release> <product>` | Filter detail view to a single product |
-| `tests status` | Test summary for all releases with progress bar |
-| `tests status <release>` | Detailed test status for a specific release |
-| `tests status <release> <product>` | Filter test detail view to a single product |
-| `investigate <artefact-id>` | Fetch build log and run LLM root-cause analysis (requires `OPENROUTER_API_KEY`) |
-| `help` | Available commands |
+| `@watchtower builds status` | Build summary for all releases with progress bar |
+| `@watchtower builds status <release>` | Detailed build status for a specific release (includes artefact IDs) |
+| `@watchtower builds status <release> <product>` | Filter detail view to a single product |
+| `@watchtower tests status` | Test summary for all releases with progress bar |
+| `@watchtower tests status <release>` | Detailed test status for a specific release |
+| `@watchtower tests status <release> <product>` | Filter test detail view to a single product |
+| `@watchtower investigate <artefact-id>` | Fetch build log and run LLM root-cause analysis (requires `OPENROUTER_API_KEY`) |
+| `@watchtower help` | Available commands |
 | *(anything else)* | LLM intent resolution (if API key set) or "I didn't understand…" |
 
-### Proactive (automatic)
+### Proactive (automatic — every 8 hours by default)
 
-Change reports are posted to the channel whenever the 10-min cron detects:
-- New failures (`MARKED_AS_FAILED`)
-- Recoveries (`APPROVED` after failure)
-- Status changes
-- New artefacts
+The scheduled summary is posted to **every channel the bot has joined**.
+Change the schedule via `SUMMARY_CRON_SCHEDULE` (default: 07:00/15:00/23:00 UTC).
 
-Format: emoji-prefixed sections (`🔴 New Failures`, `🟢 Recoveries`, `🔵 Other Changes`, `🆕 New Artefacts`).
+### Mattermost integration model
+
+The bot uses a **Bot Account** (not a personal access token or incoming webhook):
+
+- **Incoming events**: WebSocket connection to `/api/v4/websocket`, authenticated
+  with the bot token. The bot receives real-time `posted` events and filters for
+  its keyword. Reconnects automatically on disconnect.
+- **Outgoing replies**: `POST /api/v4/posts` to the channel where the command
+  was received (`ChannelNotifier`).
+- **Proactive broadcasts**: `GET /api/v4/users/{botID}/channels` to enumerate
+  joined channels, then `POST /api/v4/posts` to each (`BroadcastNotifier`).
 
 ## Terminal simulation (development)
 
@@ -253,8 +263,9 @@ you> builds status noble
 Proactive change reports from the cron workflow print inline with the same
 `[Watchtower →]` prefix.
 
-When `MATTERMOST_WEBHOOK_URL` is set, `StdoutNotifier` is replaced by
-`HTTPNotifier` with no other code changes.
+When `MATTERMOST_SERVER_URL`, `MATTERMOST_BOT_TOKEN`, and `MATTERMOST_BOT_USER_ID`
+are set, `StdoutNotifier` is replaced by `BroadcastNotifier` (proactive) and
+`ChannelNotifier` (reactive replies) with no other code changes.
 
 ## Key design decisions
 

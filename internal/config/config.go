@@ -9,19 +9,20 @@ import (
 )
 
 type Config struct {
-	DefaultRelease       string
-	SummaryForReleases   []string // ordered list of releases to include in the scheduled summary; empty = all
-	SummaryForProducts   []string // restrict summaries to these OS/product names; empty = all
-	TestObserverURL      string
-	TemporalHost         string
-	MattermostWebhookURL string // empty = stdout simulation
+	DefaultRelease     string
+	SummaryForReleases []string // ordered list of releases to include in the scheduled summary; empty = all
+	SummaryForProducts []string // restrict summaries to these OS/product names; empty = all
+	TestObserverURL    string
+	TemporalHost       string
 
-	// Incoming Mattermost polling (all optional — polling is disabled when Token or ChannelID is empty)
-	MattermostServerURL    string        // base URL of Mattermost server, e.g. https://chat.example.com
-	MattermostToken        string        // personal access token
-	MattermostChannelID    string        // channel to poll for incoming commands
-	MattermostPollInterval time.Duration // how often to poll (default 15s)
-	WatchtowerKeyword      string        // trigger keyword (default @watchtower)
+	// Mattermost bot credentials (all required for the bot to connect)
+	MattermostServerURL string // base URL of Mattermost server, e.g. http://192.168.1.193:8065
+	MattermostBotToken  string // bot token from System Console → Integrations → Bot Accounts
+	MattermostBotUserID string // user ID of the bot account (used to suppress self-echoes)
+
+	// Bot behaviour
+	WatchtowerKeyword        string        // trigger keyword (default @watchtower)
+	MattermostReconnectDelay time.Duration // WebSocket reconnect delay (default 5s)
 
 	// LLM-assisted intent resolution (optional — feature is disabled when OpenRouterAPIKey is empty)
 	OpenRouterAPIKey string
@@ -39,26 +40,25 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
-	pollInterval, err := parseDurationEnv("MATTERMOST_POLL_INTERVAL", 15*time.Second)
+	reconnectDelay, err := parseDurationEnv("MATTERMOST_RECONNECT_DELAY", 5*time.Second)
 	if err != nil {
 		return nil, err
 	}
 	return &Config{
-		DefaultRelease:         os.Getenv("DEFAULT_RELEASE"), // empty = auto-detect from data
-		SummaryForReleases:     parseSummaryList(os.Getenv("SUMMARY_FOR_RELEASES")),
-		SummaryForProducts:     parseSummaryList(os.Getenv("SUMMARY_FOR_PRODUCTS")),
-		TestObserverURL:        envOrDefault("TEST_OBSERVER_URL", "https://tests-api.ubuntu.com"),
-		TemporalHost:           envOrDefault("TEMPORAL_HOST", "localhost:7233"),
-		MattermostWebhookURL:   os.Getenv("MATTERMOST_WEBHOOK_URL"), // empty = stdout simulation
-		MattermostServerURL:    os.Getenv("MATTERMOST_SERVER_URL"),
-		MattermostToken:        os.Getenv("MATTERMOST_TOKEN"),
-		MattermostChannelID:    os.Getenv("MATTERMOST_CHANNEL_ID"),
-		MattermostPollInterval: pollInterval,
-		WatchtowerKeyword:      envOrDefault("WATCHTOWER_KEYWORD", "@watchtower"),
-		OpenRouterAPIKey:       os.Getenv("OPENROUTER_API_KEY"),
-		LLMModel:               envOrDefault("LLM_MODEL", "openai/gpt-4o-mini"),
-		RefreshCronSchedule:    envOrDefault("REFRESH_CRON_SCHEDULE", "*/30 * * * *"),
-		SummaryCronSchedule:    envOrDefault("SUMMARY_CRON_SCHEDULE", "0 7,15,23 * * *"),
+		DefaultRelease:           os.Getenv("DEFAULT_RELEASE"), // empty = auto-detect from data
+		SummaryForReleases:       parseSummaryList(os.Getenv("SUMMARY_FOR_RELEASES")),
+		SummaryForProducts:       parseSummaryList(os.Getenv("SUMMARY_FOR_PRODUCTS")),
+		TestObserverURL:          envOrDefault("TEST_OBSERVER_URL", "https://tests-api.ubuntu.com"),
+		TemporalHost:             envOrDefault("TEMPORAL_HOST", "localhost:7233"),
+		MattermostServerURL:      os.Getenv("MATTERMOST_SERVER_URL"),
+		MattermostBotToken:       os.Getenv("MATTERMOST_BOT_TOKEN"),
+		MattermostBotUserID:      os.Getenv("MATTERMOST_BOT_USER_ID"),
+		WatchtowerKeyword:        envOrDefault("WATCHTOWER_KEYWORD", "@watchtower"),
+		MattermostReconnectDelay: reconnectDelay,
+		OpenRouterAPIKey:         os.Getenv("OPENROUTER_API_KEY"),
+		LLMModel:                 envOrDefault("LLM_MODEL", "openai/gpt-4o-mini"),
+		RefreshCronSchedule:      envOrDefault("REFRESH_CRON_SCHEDULE", "*/30 * * * *"),
+		SummaryCronSchedule:      envOrDefault("SUMMARY_CRON_SCHEDULE", "0 7,15,23 * * *"),
 	}, nil
 }
 

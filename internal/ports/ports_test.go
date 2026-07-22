@@ -13,7 +13,8 @@ import (
 
 // Notifier implementations.
 var _ ports.Notifier = (*mattermostadapter.StdoutNotifier)(nil)
-var _ ports.Notifier = (*mattermostadapter.HTTPNotifier)(nil)
+var _ ports.Notifier = (*mattermostadapter.ChannelNotifier)(nil)
+var _ ports.Notifier = (*mattermostadapter.BroadcastNotifier)(nil)
 
 // LLMClient implementations.
 var _ ports.LLMClient = (*openrouter.OpenRouterClient)(nil)
