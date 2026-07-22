@@ -428,12 +428,13 @@ func runBotSession(
 
 		// Determine why (if at all) we should respond.
 		//
-		//  1. Keyword mention anywhere in the message — always triggers.
+		//  1. Keyword mentioned anywhere in the message — always triggers.
+		//     Mattermost @-mentions can appear mid-sentence: "hello @watchtower help".
 		//  2. Reply inside a thread the bot is part of — triggers without keyword.
 		//     We look up the reply's root ID in botThreads. Mattermost sets
 		//     RootID on every reply; for the first reply to a top-level post,
 		//     RootID equals that post's ID.
-		isKeywordMention := strings.HasPrefix(lower, keyword)
+		isKeywordMention := strings.Contains(lower, keyword)
 		_, inBotThread := botThreads.Load(post.RootID)
 		isThreadReply := post.RootID != "" && inBotThread
 
@@ -442,22 +443,19 @@ func runBotSession(
 		}
 
 		// Extract the command text.
-		// For keyword mentions: strip the keyword prefix.
-		// For bare thread replies: use the raw message — it will be routed through
-		// the LLM intent resolver (or the "I didn't understand" fallback).
+		// Take everything that follows the keyword in the message. This handles
+		// both leading and mid-sentence mentions:
+		//   "@watchtower help"        → "help"
+		//   "hello @watchtower help"  → "help"
+		//   "help @watchtower"        → "" → "help" (bare mention)
+		// For thread replies with no keyword, use the raw message.
 		var cmd string
 		if isKeywordMention {
-			cmd = strings.TrimSpace(post.Message[len(keyword):])
-			// Also strip keyword if it appears mid-message (e.g. thread reply + keyword).
-			if cmd == "" && isThreadReply {
-				cmd = post.Message
-			}
+			idx := strings.Index(lower, keyword)
+			cmd = strings.TrimSpace(post.Message[idx+len(keyword):])
 		} else {
 			cmd = post.Message
 		}
-		// Strip keyword from cmd regardless (covers keyword-in-thread-reply case).
-		cmd = strings.TrimSpace(strings.ReplaceAll(cmd, keyword, ""))
-		cmd = strings.TrimSpace(strings.ReplaceAll(cmd, cfg.Keyword, ""))
 		if cmd == "" {
 			cmd = "help"
 		}

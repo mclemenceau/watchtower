@@ -218,6 +218,48 @@ func TestRunBotDispatchesKeywordMention(t *testing.T) {
 	}
 }
 
+// TestRunBotDispatchesMidSentenceMention verifies that the keyword is matched
+// anywhere in the message, not just at the start. e.g. "hello @watchtower help".
+func TestRunBotDispatchesMidSentenceMention(t *testing.T) {
+	var (
+		mu        sync.Mutex
+		postedMsg string
+	)
+
+	srv := newTestServer(t,
+		func(conn *websocket.Conn) {
+			// Keyword appears mid-sentence — bot must still respond.
+			_ = conn.WriteJSON(postedEvent("ch1", "user42", "post-user-1", "", "hello @watchtower help"))
+		},
+		func(req map[string]string) {
+			mu.Lock()
+			postedMsg = req["message"]
+			mu.Unlock()
+		},
+	)
+	defer srv.Close()
+
+	snap := state.New(t.TempDir() + "/snap.json")
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	mattermostadapter.RunBot(ctx, mattermostadapter.BotConfig{
+		ServerURL:      srv.URL,
+		Token:          "testtoken",
+		BotUserID:      "botuser",
+		Keyword:        "@watchtower",
+		ReconnectDelay: 10 * time.Millisecond,
+	}, snap, nil, "", nil, nil, nil, nil, nil, nil, nil, nil)
+
+	mu.Lock()
+	got := postedMsg
+	mu.Unlock()
+
+	if !strings.Contains(got, "builds status") {
+		t.Errorf("expected help text in posted reply for mid-sentence mention, got: %q", got)
+	}
+}
+
 // TestRunBotRespondsToThreadReplyWithoutKeyword verifies that the bot replies
 // to a thread follow-up that contains no keyword, as long as the thread was
 // started by the bot itself.
