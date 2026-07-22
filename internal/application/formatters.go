@@ -449,6 +449,20 @@ func FormatInvestigation(art domain.Artefact, analysis domain.LogAnalysis, sourc
 	return sb.String()
 }
 
+// GreetText returns a short, friendly greeting shown when the bot is mentioned
+// with no command. It summarises capabilities and invites natural-language use.
+func GreetText() string {
+	return `Hey! I'm Watchtower, your Ubuntu image build pipeline monitor.
+
+Here's what I can help with:
+- **Build status** — are today's images built yet?
+- **Test status** — how are the test runs looking?
+- **Failures** — which builds are failing and why?
+- **Investigate** — deep-dive into a specific build log with AI analysis
+
+Just ask me in plain English — _how is noble doing today?_, _what's failing for desktop?_ — or type ` + "`help`" + ` for the full command reference.`
+}
+
 // HelpText returns the Markdown help message listing all available commands.
 func HelpText() string {
 	return `**Watchtower — available commands:**

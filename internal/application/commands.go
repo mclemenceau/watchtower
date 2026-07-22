@@ -89,7 +89,7 @@ func Dispatch(
 		}
 		msg = strings.TrimSpace(msg[len(kw):])
 		if msg == "" {
-			msg = "help" // bare keyword → show help
+			msg = "greet" // bare keyword → friendly greeting
 		}
 	}
 
@@ -97,6 +97,9 @@ func Dispatch(
 	parts := strings.Fields(msg)
 
 	switch {
+	case lower == "greet":
+		return notifier.Send(GreetText())
+
 	case lower == "help":
 		return notifier.Send(HelpText())
 
@@ -165,7 +168,7 @@ func Dispatch(
 				return notifier.Send(res.Reply)
 			}
 		}
-		return notifier.Send(fmt.Sprintf("I didn't understand `%s`. Type `help` for available commands.", msg))
+		return notifier.Send(fmt.Sprintf("I didn't quite get `%s` — try asking me in natural language, or type `help` to see all commands.", msg))
 	}
 }
 

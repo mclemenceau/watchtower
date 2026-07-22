@@ -364,8 +364,8 @@ func TestDispatchUnknown(t *testing.T) {
 	if err := Dispatch(context.Background(), "test", "banana", testArtefacts, nil, "", nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(hook.last, "didn't understand") {
-		t.Errorf("expected 'didn't understand' response, got: %s", hook.last)
+	if !strings.Contains(hook.last, "didn't quite get") {
+		t.Errorf("expected 'didn't quite get' response, got: %s", hook.last)
 	}
 	if !strings.Contains(hook.last, "banana") {
 		t.Errorf("response should echo the unknown command, got: %s", hook.last)
@@ -672,14 +672,17 @@ func TestDispatchKeywordCaseInsensitive(t *testing.T) {
 	}
 }
 
-func TestDispatchKeywordBareShowsHelp(t *testing.T) {
+func TestDispatchKeywordBareShowsGreeting(t *testing.T) {
 	hook := &captureNotifier{}
-	// Just the keyword alone (no command) should show help.
+	// Just the keyword alone (no command) should show the friendly greeting.
 	if err := Dispatch(context.Background(), "test", "@watchtower", testArtefacts, nil, "", nil, nil, hook, "@watchtower", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(hook.last, "builds status") {
-		t.Errorf("bare keyword should show help, got: %s", hook.last)
+	if !strings.Contains(hook.last, "Watchtower") {
+		t.Errorf("bare keyword should show greeting, got: %s", hook.last)
+	}
+	if !strings.Contains(hook.last, "help") {
+		t.Errorf("greeting should mention 'help' command, got: %s", hook.last)
 	}
 }
 
