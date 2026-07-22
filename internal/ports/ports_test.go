@@ -23,6 +23,9 @@ var _ ports.LLMClient = (*openrouter.MockLLMClient)(nil)
 // SnapshotStore implementation.
 var _ ports.SnapshotStore = (*state.Snapshot)(nil)
 
+// FailureStorePort implementation.
+var _ ports.FailureStorePort = (*state.FailureState)(nil)
+
 // ArtefactSource and BuildSource implementations.
 var _ ports.ArtefactSource = (*testobserver.HTTPArtefactSource)(nil)
 var _ ports.BuildSource = (*testobserver.HTTPBuildSource)(nil)

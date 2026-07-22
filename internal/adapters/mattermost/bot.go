@@ -16,6 +16,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/mclemenceau/watchtower/internal/application"
+	"github.com/mclemenceau/watchtower/internal/domain"
 	"github.com/mclemenceau/watchtower/internal/intent"
 	"github.com/mclemenceau/watchtower/internal/ports"
 	"github.com/mclemenceau/watchtower/internal/state"
@@ -252,15 +253,16 @@ type wsPost struct {
 // and dispatches every @-mention or thread-reply to application.Dispatch.
 // It reconnects automatically on disconnect until ctx is cancelled.
 //
-// snap is used to read fresh artefact data on every dispatch. The bot posts
-// responses back to the same channel via the REST API.
-//
+// snap is used to read fresh artefact data on every dispatch. failures is used
+// to read the current failure store; pass nil to disable failure commands.
+// triggerAnalysis is called when the user requests on-demand analysis; pass nil to disable.
 // resolver, logFetcher, llm, and launchpad are optional; pass nil to disable
 // the respective features.
 func RunBot(
 	ctx context.Context,
 	cfg BotConfig,
 	snap *state.Snapshot,
+	failures ports.FailureStorePort,
 	defaultRelease string,
 	summaryForProducts []string,
 	summaryForReleases []string,
@@ -269,6 +271,7 @@ func RunBot(
 	logFetcher ports.LogFetcher,
 	llm ports.LLMClient,
 	launchpad ports.LaunchpadSource,
+	triggerAnalysis func(release string) error,
 ) {
 	if cfg.Token == "" || cfg.ServerURL == "" {
 		log.Print("mattermost bot: disabled (MATTERMOST_SERVER_URL or MATTERMOST_BOT_TOKEN not set)")
@@ -292,7 +295,7 @@ func RunBot(
 	log.Printf("mattermost bot: connecting to %s (keyword: %q)", cfg.ServerURL, keyword)
 
 	for {
-		if err := runBotSession(ctx, cfg, keyword, snap, defaultRelease, summaryForProducts, summaryForReleases, httpClient, resolver, logFetcher, llm, launchpad); err != nil {
+		if err := runBotSession(ctx, cfg, keyword, snap, failures, defaultRelease, summaryForProducts, summaryForReleases, httpClient, resolver, logFetcher, llm, launchpad, triggerAnalysis); err != nil {
 			if ctx.Err() != nil {
 				log.Print("mattermost bot: context cancelled, shutting down")
 				return
@@ -315,6 +318,7 @@ func runBotSession(
 	cfg BotConfig,
 	keyword string,
 	snap *state.Snapshot,
+	failures ports.FailureStorePort,
 	defaultRelease string,
 	summaryForProducts []string,
 	summaryForReleases []string,
@@ -323,6 +327,7 @@ func runBotSession(
 	logFetcher ports.LogFetcher,
 	llm ports.LLMClient,
 	launchpad ports.LaunchpadSource,
+	triggerAnalysis func(release string) error,
 ) error {
 	wsURL, err := buildWSURL(cfg.ServerURL)
 	if err != nil {
@@ -463,6 +468,16 @@ func runBotSession(
 			continue
 		}
 
+		var failureStore domain.FailureStore
+		if failures != nil {
+			if fs, ferr := failures.ReadFailures(); ferr == nil {
+				failureStore = fs
+			}
+		}
+		if failureStore == nil {
+			failureStore = make(domain.FailureStore)
+		}
+
 		// Build the notifier. Thread replies go back into the same thread;
 		// keyword mentions at channel root get a top-level reply.
 		channelN := NewChannelNotifier(cfg.ServerURL, cfg.Token, post.ChannelID)
@@ -489,15 +504,16 @@ func runBotSession(
 		// Session key: channelID+userID for multi-turn LLM clarification.
 		sessionID := post.ChannelID + ":" + post.UserID
 
-		go func(n ports.Notifier, sid, command string) {
+		go func(n ports.Notifier, sid, command string, fs domain.FailureStore) {
 			if err := application.Dispatch(
-				ctx, sid, command, artefacts,
+				ctx, sid, command, artefacts, fs,
 				defaultRelease, summaryForProducts, summaryForReleases,
 				n, "", resolver, logFetcher, llm, launchpad,
+				triggerAnalysis,
 			); err != nil {
 				log.Printf("mattermost bot: dispatch %q: %v", command, err)
 			}
-		}(notifier, sessionID, cmd)
+		}(notifier, sessionID, cmd, failureStore)
 	}
 }
 

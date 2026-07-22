@@ -34,6 +34,11 @@ Supported commands:
   tests status
   tests status <release>
   tests status <release> <product>
+  failures
+  failures <release>
+  failures <release> <product>
+  analyse failures
+  analyse failures <release>
   help
 
 Rules:
@@ -50,11 +55,17 @@ Examples:
   User: "show me failing noble builds"
   → {"command":"builds status noble","confidence":0.9,"clarification":""}
 
-  User: "status"
-  → {"command":"","confidence":0.2,"clarification":"Do you want build status or test status?"}
+  User: "why is desktop failing?"
+  → {"command":"","confidence":0.3,"clarification":"Which release are you asking about?"}
 
-  User: "build status" (after clarification answer "noble")
-  → {"command":"builds status noble","confidence":0.9,"clarification":""}
+  User: "what failures do we have?"
+  → {"command":"failures","confidence":0.9,"clarification":""}
+
+  User: "analyse the noble failures"
+  → {"command":"analyse failures noble","confidence":0.9,"clarification":""}
+
+  User: "status"
+  → {"command":"","confidence":0.2,"clarification":"Do you want build status, test status, or failure status?"}
 `
 
 // intentResponse is the JSON structure the LLM is instructed to return.

@@ -455,15 +455,113 @@ func HelpText() string {
 
 | Command | Description |
 |---------|-------------|
-| ` + "`summary`" + `                                 | Scheduled build summary (same as the automatic post) |
-| ` + "`builds status`" + `                          | Build summary for all releases with progress bar |
-| ` + "`builds status <release>`" + `                | Detailed build status for a specific release (includes artefact IDs) |
-| ` + "`builds status <release> <product>`" + `      | Filter detail view to a single product |
-| ` + "`tests status`" + `                           | Test summary for all releases with progress bar |
-| ` + "`tests status <release>`" + `                 | Detailed test status for a specific release |
-| ` + "`tests status <release> <product>`" + `       | Filter test detail view to a single product |
-| ` + "`investigate <artefact-id>`" + `              | Fetch build log and run LLM root-cause analysis |
-| ` + "`help`" + `                                   | Show this message |
+| ` + "`summary`" + `                                        | Scheduled build summary (same as the automatic post) |
+| ` + "`builds status`" + `                                 | Build summary for all releases with progress bar |
+| ` + "`builds status <release>`" + `                       | Detailed build status for a specific release (includes artefact IDs) |
+| ` + "`builds status <release> <product>`" + `             | Filter detail view to a single product |
+| ` + "`tests status`" + `                                  | Test summary for all releases with progress bar |
+| ` + "`tests status <release>`" + `                        | Detailed test status for a specific release |
+| ` + "`tests status <release> <product>`" + `              | Filter test detail view to a single product |
+| ` + "`failures`" + `                                      | Active failures across all releases |
+| ` + "`failures <release>`" + `                            | Active failures for a specific release |
+| ` + "`failures <release> <product>`" + `                  | Active failures for a release and product |
+| ` + "`analyse failures`" + `                              | Trigger LLM log analysis on pending failures (background) |
+| ` + "`analyse failures <release>`" + `                    | Trigger analysis scoped to a release |
+| ` + "`investigate <artefact-id>`" + `                     | Fetch build log and run LLM root-cause analysis |
+| ` + "`help`" + `                                          | Show this message |
 
-The scheduled build summary is posted automatically per SUMMARY_CRON_SCHEDULE.`
+The scheduled build summary is posted automatically per SUMMARY_CRON_SCHEDULE.
+Failure analysis runs automatically per FAILURE_ANALYSIS_CRON_SCHEDULE (default every 8 h).`
+}
+
+// FormatFailuresSummary renders a compact list of active (unresolved) failures.
+// Records are grouped by release then product. When no failures are found an
+// appropriate message is returned. release and product are used only in the
+// header when non-empty; the caller is responsible for pre-filtering records.
+func FormatFailuresSummary(records []domain.FailureRecord, release, product string) string {
+	if len(records) == 0 {
+		switch {
+		case release != "" && product != "":
+			return fmt.Sprintf("No active failures for **%s** / **%s**.", release, product)
+		case release != "":
+			return fmt.Sprintf("No active failures for **%s**.", release)
+		default:
+			return "No active failures detected."
+		}
+	}
+
+	// Group by release → product for display.
+	type key struct{ release, product string }
+	order := []key{}
+	byKey := make(map[key][]domain.FailureRecord)
+	for _, r := range records {
+		k := key{r.Release, r.Product}
+		if _, seen := byKey[k]; !seen {
+			order = append(order, k)
+		}
+		byKey[k] = append(byKey[k], r)
+	}
+	sort.Slice(order, func(i, j int) bool {
+		if order[i].release != order[j].release {
+			return order[i].release < order[j].release
+		}
+		return order[i].product < order[j].product
+	})
+
+	var sb strings.Builder
+	title := "**Active Failures**"
+	if release != "" && product != "" {
+		title = fmt.Sprintf("**Active Failures · %s / %s**", release, product)
+	} else if release != "" {
+		title = fmt.Sprintf("**Active Failures · %s**", release)
+	}
+	fmt.Fprintf(&sb, "%s · %s\n\n", title, time.Now().UTC().Format("2006-01-02 15:04 UTC"))
+
+	for _, k := range order {
+		recs := byKey[k]
+		fmt.Fprintf(&sb, "**%s / %s** — %d failing\n", k.release, k.product, len(recs))
+		for _, r := range recs {
+			occStr := ""
+			if r.Occurrences > 1 {
+				occStr = fmt.Sprintf(" (%d× recurring)", r.Occurrences)
+			}
+			analysisStr := " _(analysis pending)_"
+			if r.Analysis != nil {
+				analysisStr = fmt.Sprintf(" — %s: %s", r.Analysis.Category, r.Analysis.Hypothesis)
+			}
+			fmt.Fprintf(&sb, " - **%s**%s%s\n", r.ArtefactName, occStr, analysisStr)
+		}
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
+// FormatFailureDetail renders the full detail for a single FailureRecord,
+// including its LLM analysis if available.
+func FormatFailureDetail(r domain.FailureRecord) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "**Failure Detail — %s** · %s / %s\n\n", r.ArtefactName, r.Release, r.Product)
+	fmt.Fprintf(&sb, "**First seen:** %s · **Last seen:** %s · **Occurrences:** %d\n",
+		r.FirstSeenVersion, r.LastSeenVersion, r.Occurrences)
+
+	if r.Analysis == nil {
+		sb.WriteString("\n_Analysis not yet available. Run `analyse failures` to trigger LLM analysis._\n")
+		return sb.String()
+	}
+
+	fmt.Fprintf(&sb, "**Analysed version:** %s", r.AnalysedVersion)
+	if r.AnalysedAt != nil {
+		fmt.Fprintf(&sb, " · **Analysed at:** %s", r.AnalysedAt.UTC().Format("2006-01-02 15:04 UTC"))
+	}
+	sb.WriteString("\n\n")
+	fmt.Fprintf(&sb, "**Category:** %s\n", r.Analysis.Category)
+	fmt.Fprintf(&sb, "**Hypothesis:** %s\n", r.Analysis.Hypothesis)
+	if len(r.Analysis.LogExcerpts) > 0 {
+		sb.WriteString("\n**Relevant log excerpts:**\n")
+		for _, line := range r.Analysis.LogExcerpts {
+			fmt.Fprintf(&sb, "- `%s`\n", line)
+		}
+	}
+	fmt.Fprintf(&sb, "\n**Recommended action:** %s\n", r.Analysis.NextAction)
+	return sb.String()
 }

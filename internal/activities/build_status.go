@@ -18,12 +18,14 @@ type Activities struct {
 	Artefacts          ports.ArtefactSource
 	Tests              ports.BuildSource
 	Snapshot           ports.SnapshotStore
+	Failures           ports.FailureStorePort
 	Hook               ports.Notifier
 	LogFetcher         ports.LogFetcher
 	DefaultRelease     string   // pin status table to this release; empty = auto-detect
 	SummaryForReleases []string // ordered release list for scheduled summary; nil = all
 	SummaryForProducts []string // restrict summaries to these OS/product names; nil = all
 	LLM                ports.LLMClient
+	MaxAnalysisPerRun  int // cap on LLM calls per FailureAnalysisWorkflow run; 0 = default (5)
 }
 
 func (a *Activities) FetchBuildStatus(ctx context.Context) ([]domain.Artefact, error) {
@@ -144,4 +146,133 @@ func containsSummaryProduct(list []string, product string) bool {
 		}
 	}
 	return false
+}
+
+// LoadFailures reads the current FailureStore from disk.
+func (a *Activities) LoadFailures(_ context.Context) (domain.FailureStore, error) {
+	if a.Failures == nil {
+		return make(domain.FailureStore), nil
+	}
+	store, err := a.Failures.ReadFailures()
+	if err != nil {
+		return nil, fmt.Errorf("LoadFailures: %w", err)
+	}
+	return store, nil
+}
+
+// SaveFailures persists the FailureStore to disk.
+func (a *Activities) SaveFailures(_ context.Context, store domain.FailureStore) error {
+	if a.Failures == nil {
+		return nil
+	}
+	if err := a.Failures.WriteFailures(store); err != nil {
+		return fmt.Errorf("SaveFailures: %w", err)
+	}
+	return nil
+}
+
+// UpdateFailureRecords merges a ChangeReport into the persisted FailureStore:
+//   - NewFailures → upsert (create or increment occurrences)
+//   - Recoveries  → mark resolved (silently, no notification per spec)
+//
+// The artefacts slice is used to look up Release and OS for each delta, since
+// ArtefactDelta only carries Name/Release/Version, not OS/product.
+func (a *Activities) UpdateFailureRecords(_ context.Context, report domain.ChangeReport, artefacts []domain.Artefact) error {
+	if a.Failures == nil {
+		return nil
+	}
+
+	store, err := a.Failures.ReadFailures()
+	if err != nil {
+		return fmt.Errorf("UpdateFailureRecords: read: %w", err)
+	}
+
+	// Build a quick name→artefact index (name is unique enough for this purpose).
+	byName := make(map[string]domain.Artefact, len(artefacts))
+	for _, art := range artefacts {
+		byName[art.Name] = art
+	}
+
+	for _, delta := range report.NewFailures {
+		art, ok := byName[delta.Name]
+		if !ok {
+			continue
+		}
+		store.UpsertFailure(art)
+	}
+
+	for _, delta := range report.Recoveries {
+		art, ok := byName[delta.Name]
+		if !ok {
+			continue
+		}
+		store.ResolveFailure(art.ID, art.Release, art.OS)
+	}
+
+	if err := a.Failures.WriteFailures(store); err != nil {
+		return fmt.Errorf("UpdateFailureRecords: write: %w", err)
+	}
+	return nil
+}
+
+// AnalyseFailures runs LLM log analysis on unresolved FailureRecords that have
+// no Analysis yet. It processes at most maxPerRun records (token cap). Results
+// are persisted back to failures.json after each successful analysis.
+func (a *Activities) AnalyseFailures(ctx context.Context, artefacts []domain.Artefact) error {
+	if a.Failures == nil || a.LLM == nil || a.LogFetcher == nil {
+		return nil // LLM or fetcher not configured — skip silently
+	}
+
+	store, err := a.Failures.ReadFailures()
+	if err != nil {
+		return fmt.Errorf("AnalyseFailures: read: %w", err)
+	}
+
+	maxPerRun := a.MaxAnalysisPerRun
+	if maxPerRun <= 0 {
+		maxPerRun = 5
+	}
+
+	pending := store.PendingAnalysis(maxPerRun)
+	if len(pending) == 0 {
+		return nil
+	}
+
+	// Build artefact index by ID for log URL resolution.
+	byID := make(map[int]domain.Artefact, len(artefacts))
+	for _, art := range artefacts {
+		byID[art.ID] = art
+	}
+
+	for _, rec := range pending {
+		art, ok := byID[rec.ArtefactID]
+		if !ok {
+			continue
+		}
+
+		// Derive today's log URL for this artefact.
+		today := time.Now().UTC().Format("20060102")
+		logURL := domain.LogURLFromImageURLForDate(art.ImageURL, today)
+		if logURL == "" {
+			continue
+		}
+
+		logContent, err := a.FetchLog(ctx, logURL)
+		if err != nil {
+			// Non-fatal: log URL may not exist yet for today's build.
+			continue
+		}
+
+		analysis, err := a.AnalyzeLog(ctx, art.Name, logContent)
+		if err != nil {
+			// Non-fatal: one bad LLM call should not abort the run.
+			continue
+		}
+		store.SetAnalysis(rec.ArtefactID, rec.Release, rec.Product, analysis, rec.LastSeenVersion)
+	}
+
+	if err := a.Failures.WriteFailures(store); err != nil {
+		return fmt.Errorf("AnalyseFailures: write: %w", err)
+	}
+	return nil
 }

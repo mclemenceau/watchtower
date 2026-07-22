@@ -27,6 +27,15 @@ type SnapshotStore interface {
 	Write(artefacts []domain.Artefact) error
 }
 
+// FailureStorePort persists and retrieves the structured failure store.
+// The store is keyed release → product → []FailureRecord and is the backing
+// store for failures.json. Reads return an empty (non-nil) store when the file
+// does not exist yet.
+type FailureStorePort interface {
+	ReadFailures() (domain.FailureStore, error)
+	WriteFailures(domain.FailureStore) error
+}
+
 // LLMClient calls a large language model for text completion.
 type LLMClient interface {
 	Complete(ctx context.Context, system, prompt string) (string, error)

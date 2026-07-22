@@ -82,7 +82,7 @@ func TestRunBotDisabledWhenNoCreds(t *testing.T) {
 		ServerURL: srv.URL,
 		BotUserID: "bot1",
 		Keyword:   "@watchtower",
-	}, snap, "", nil, nil, nil, nil, nil, nil, nil)
+	}, snap, nil, "", nil, nil, nil, nil, nil, nil, nil, nil)
 
 	if httpCalled.Load() {
 		t.Error("RunBot should not make any HTTP/WS calls when Token is missing")
@@ -207,7 +207,7 @@ func TestRunBotDispatchesKeywordMention(t *testing.T) {
 		BotUserID:      "botuser",
 		Keyword:        "@watchtower",
 		ReconnectDelay: 10 * time.Millisecond,
-	}, snap, "", nil, nil, nil, nil, nil, nil, nil)
+	}, snap, nil, "", nil, nil, nil, nil, nil, nil, nil, nil)
 
 	mu.Lock()
 	got := postedMsg
@@ -260,7 +260,7 @@ func TestRunBotRespondsToThreadReplyWithoutKeyword(t *testing.T) {
 		BotUserID:      "botuser",
 		Keyword:        "@watchtower",
 		ReconnectDelay: 10 * time.Millisecond,
-	}, snap, "", nil, nil, nil, nil, nil, nil, nil)
+	}, snap, nil, "", nil, nil, nil, nil, nil, nil, nil, nil)
 
 	mu.Lock()
 	count := len(postedMsgs)

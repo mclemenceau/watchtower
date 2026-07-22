@@ -104,6 +104,7 @@ func main() {
 	artefactSrc := testobserver.NewHTTPArtefactSource(cfg.TestObserverURL)
 	buildSrc := testobserver.NewHTTPBuildSource(cfg.TestObserverURL)
 	snap := state.New("state/snapshot.json")
+	failureState := state.NewFailureState("state/failures.json")
 	logFetcher := &httpLogFetcher{client: &http.Client{Timeout: 30 * time.Second}}
 	launchpadSrc := launchpadadapter.NewHTTPLaunchpadSource()
 
@@ -134,12 +135,14 @@ func main() {
 		Artefacts:          artefactSrc,
 		Tests:              buildSrc,
 		Snapshot:           snap,
+		Failures:           failureState,
 		Hook:               notifier,
 		LogFetcher:         logFetcher,
 		DefaultRelease:     cfg.DefaultRelease,
 		SummaryForReleases: cfg.SummaryForReleases,
 		SummaryForProducts: cfg.SummaryForProducts,
 		LLM:                llmClient,
+		MaxAnalysisPerRun:  cfg.MaxFailuresPerAnalysisRun,
 	}
 
 	// Register and start the Temporal worker in the background.
@@ -148,6 +151,7 @@ func main() {
 	})
 	w.RegisterWorkflow(watchtowerworkflow.DataRefreshWorkflow)
 	w.RegisterWorkflow(watchtowerworkflow.SummaryPostWorkflow)
+	w.RegisterWorkflow(watchtowerworkflow.FailureAnalysisWorkflow)
 	w.RegisterActivity(act)
 
 	go func() {
@@ -159,18 +163,33 @@ func main() {
 	// Terminate any stale workflows whose types are no longer registered.
 	terminateStaleWorkflows(c, "status-table", "query", "change-watch", "change-watch-init")
 
-	// Start the two cron workflows (idempotent — Temporal ignores if already running).
+	// Start the cron workflows (idempotent — Temporal ignores if already running).
 	startDataRefreshWorkflow(c, cfg.RefreshCronSchedule)
 	startSummaryPostWorkflow(c, cfg.SummaryCronSchedule)
+	startFailureAnalysisWorkflow(c, cfg.FailureAnalysisCronSchedule)
 
 	// If the snapshot is empty (first boot), trigger an immediate fetch.
 	triggerInitialFetch(c, snap)
 
-	log.Printf("bot started on task queue %q (temporal: %s, refresh: %s, summary: %s)",
-		taskQueue, cfg.TemporalHost, cfg.RefreshCronSchedule, cfg.SummaryCronSchedule)
+	log.Printf("bot started on task queue %q (temporal: %s, refresh: %s, summary: %s, analysis: %s)",
+		taskQueue, cfg.TemporalHost, cfg.RefreshCronSchedule, cfg.SummaryCronSchedule, cfg.FailureAnalysisCronSchedule)
+
+	// triggerAnalysis starts a one-shot FailureAnalysisWorkflow in the background.
+	// release may be empty to analyse all pending failures.
+	triggerAnalysis := func(release string) error {
+		id := "failure-analysis-ondemand"
+		if release != "" {
+			id = "failure-analysis-ondemand-" + release
+		}
+		_, err := c.ExecuteWorkflow(
+			context.Background(),
+			client.StartWorkflowOptions{ID: id, TaskQueue: taskQueue},
+			watchtowerworkflow.FailureAnalysisWorkflow,
+		)
+		return err
+	}
 
 	// Start the Mattermost WebSocket bot in the background.
-	// It will reconnect automatically on disconnect.
 	botCtx, cancelBot := context.WithCancel(context.Background())
 	defer cancelBot()
 	go mattermostadapter.RunBot(
@@ -183,19 +202,26 @@ func main() {
 			ReconnectDelay: cfg.MattermostReconnectDelay,
 		},
 		snap,
+		failureState,
 		cfg.DefaultRelease,
 		cfg.SummaryForProducts,
 		cfg.SummaryForReleases,
-		nil, // httpClient — bot.go will use its own default
+		nil, // httpClient — bot.go uses its own default
 		resolver,
 		logFetcher,
 		llmClient,
 		launchpadSrc,
+		triggerAnalysis,
 	)
 
 	// Run the interactive REPL — blocks until stdin is closed or Ctrl-D.
-	// In production the REPL simply echoes to stdout; the bot handles Mattermost.
-	mattermostadapter.RunREPL(context.Background(), os.Stdin, notifier, snap, cfg.DefaultRelease, cfg.SummaryForProducts, cfg.SummaryForReleases, cfg.WatchtowerKeyword, resolver, logFetcher, llmClient, launchpadSrc)
+	mattermostadapter.RunREPL(
+		context.Background(), os.Stdin, notifier,
+		snap, failureState,
+		cfg.DefaultRelease, cfg.SummaryForProducts, cfg.SummaryForReleases,
+		cfg.WatchtowerKeyword, resolver, logFetcher, llmClient, launchpadSrc,
+		triggerAnalysis,
+	)
 }
 
 func startDataRefreshWorkflow(c client.Client, cronSchedule string) {
@@ -229,6 +255,23 @@ func startSummaryPostWorkflow(c client.Client, cronSchedule string) {
 		log.Printf("note: summary-post cron start: %v", err)
 	} else {
 		log.Printf("summary-post cron scheduled (%s)", cronSchedule)
+	}
+}
+
+func startFailureAnalysisWorkflow(c client.Client, cronSchedule string) {
+	_, err := c.ExecuteWorkflow(
+		context.Background(),
+		client.StartWorkflowOptions{
+			ID:           "failure-analysis",
+			TaskQueue:    taskQueue,
+			CronSchedule: cronSchedule,
+		},
+		watchtowerworkflow.FailureAnalysisWorkflow,
+	)
+	if err != nil {
+		log.Printf("note: failure-analysis cron start: %v", err)
+	} else {
+		log.Printf("failure-analysis cron scheduled (%s)", cronSchedule)
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 
 // Dispatch routes an incoming message to the appropriate handler and sends the
 // reply via notifier. artefacts is the current snapshot (may be nil/empty on first boot).
+// failures is the current FailureStore (may be empty on first boot).
 // Each artefact's Builds field is populated by the cron workflow and contains
 // cached test execution data used by the `tests` commands.
 //
@@ -35,6 +36,10 @@ import (
 // a helpful error). launchpad enables two-hop Launchpad librarian log resolution;
 // when nil the command falls back to the cd-build-log.
 //
+// triggerAnalysis is an optional callback invoked when the user requests
+// `analyse failures [release]`. It should start a background FailureAnalysisWorkflow.
+// Pass nil to disable on-demand analysis triggering.
+//
 // allowedProducts is an optional allow-list of product/OS names (case-insensitive).
 // When non-empty, artefacts whose OS is not in the list are excluded from all
 // summary and detail views. Pass nil to include all products.
@@ -45,6 +50,7 @@ func Dispatch(
 	ctx context.Context,
 	sessionID, msg string,
 	artefacts []domain.Artefact,
+	failures domain.FailureStore,
 	defaultRelease string,
 	summaryForProducts []string,
 	summaryForReleases []string,
@@ -54,6 +60,7 @@ func Dispatch(
 	logFetcher ports.LogFetcher,
 	llm ports.LLMClient,
 	launchpad ports.LaunchpadSource,
+	triggerAnalysis func(release string) error,
 ) error {
 	msg = strings.TrimSpace(msg)
 	if msg == "" {
@@ -126,6 +133,21 @@ func Dispatch(
 	case lower == "investigate":
 		return notifier.Send("Usage: `investigate <artefact-id>` — use `builds status <release>` to find IDs")
 
+	case lower == "failures":
+		return notifier.Send(FormatFailuresSummary(failures.ActiveFailures("", ""), "", ""))
+
+	case strings.HasPrefix(lower, "failures ") && len(parts) == 2:
+		return notifier.Send(FormatFailuresSummary(failures.ActiveFailures(parts[1], ""), parts[1], ""))
+
+	case strings.HasPrefix(lower, "failures ") && len(parts) == 3:
+		return notifier.Send(FormatFailuresSummary(failures.ActiveFailures(parts[1], parts[2]), parts[1], parts[2]))
+
+	case lower == "analyse failures" || lower == "analyze failures":
+		return triggerAnalysisCommand(ctx, "", triggerAnalysis, notifier)
+
+	case (strings.HasPrefix(lower, "analyse failures ") || strings.HasPrefix(lower, "analyze failures ")) && len(parts) == 3:
+		return triggerAnalysisCommand(ctx, parts[2], triggerAnalysis, notifier)
+
 	default:
 		if resolver != nil {
 			res := resolver.Resolve(ctx, sessionID, msg)
@@ -133,7 +155,7 @@ func Dispatch(
 			case intent.Dispatched:
 				// Re-dispatch with the resolved command; no further intent resolution.
 				// logFetcher/llm/launchpad are nil — investigate cannot be invoked via intent resolver.
-				return Dispatch(ctx, sessionID, res.Command, artefacts, defaultRelease, summaryForProducts, summaryForReleases, notifier, "", nil, nil, nil, nil)
+				return Dispatch(ctx, sessionID, res.Command, artefacts, failures, defaultRelease, summaryForProducts, summaryForReleases, notifier, "", nil, nil, nil, nil, triggerAnalysis)
 			case intent.NeedsInfo:
 				return notifier.Send(res.Reply)
 			case intent.Failed:
@@ -198,4 +220,19 @@ func summaryProductAllowed(list []string, product string) bool {
 		}
 	}
 	return false
+}
+
+// triggerAnalysisCommand triggers a background failure analysis workflow.
+// release may be empty to analyse all pending failures.
+func triggerAnalysisCommand(_ context.Context, release string, trigger func(string) error, notifier ports.Notifier) error {
+	if trigger == nil {
+		return notifier.Send("On-demand failure analysis is not configured (LLM or Temporal unavailable).")
+	}
+	if err := trigger(release); err != nil {
+		return notifier.Send(fmt.Sprintf("Failed to start failure analysis: %s", err.Error()))
+	}
+	if release != "" {
+		return notifier.Send(fmt.Sprintf("Failure analysis started for **%s** — results will appear in `failures %s` once complete.", release, release))
+	}
+	return notifier.Send("Failure analysis started — results will appear in `failures` once complete.")
 }

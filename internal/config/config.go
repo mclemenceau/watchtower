@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -28,9 +29,11 @@ type Config struct {
 	OpenRouterAPIKey string
 	LLMModel         string
 
-	// Cron schedules for the two background workflows
-	RefreshCronSchedule string // dataset refresh interval (default every 30 min)
-	SummaryCronSchedule string // when to post the scheduled build summary (default 07:00/15:00/23:00 UTC)
+	// Cron schedules for the background workflows
+	RefreshCronSchedule         string // dataset refresh interval (default every 30 min)
+	SummaryCronSchedule         string // when to post the scheduled build summary (default 07:00/15:00/23:00 UTC)
+	FailureAnalysisCronSchedule string // when to run LLM failure analysis (default every 8 h)
+	MaxFailuresPerAnalysisRun   int    // LLM call cap per analysis run (default 5)
 }
 
 func Load() (*Config, error) {
@@ -44,21 +47,27 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	maxFailures, err := parseIntEnv("MAX_FAILURES_PER_ANALYSIS_RUN", 5)
+	if err != nil {
+		return nil, err
+	}
 	return &Config{
-		DefaultRelease:           os.Getenv("DEFAULT_RELEASE"), // empty = auto-detect from data
-		SummaryForReleases:       parseSummaryList(os.Getenv("SUMMARY_FOR_RELEASES")),
-		SummaryForProducts:       parseSummaryList(os.Getenv("SUMMARY_FOR_PRODUCTS")),
-		TestObserverURL:          envOrDefault("TEST_OBSERVER_URL", "https://tests-api.ubuntu.com"),
-		TemporalHost:             envOrDefault("TEMPORAL_HOST", "localhost:7233"),
-		MattermostServerURL:      os.Getenv("MATTERMOST_SERVER_URL"),
-		MattermostBotToken:       os.Getenv("MATTERMOST_BOT_TOKEN"),
-		MattermostBotUserID:      os.Getenv("MATTERMOST_BOT_USER_ID"),
-		WatchtowerKeyword:        envOrDefault("WATCHTOWER_KEYWORD", "@watchtower"),
-		MattermostReconnectDelay: reconnectDelay,
-		OpenRouterAPIKey:         os.Getenv("OPENROUTER_API_KEY"),
-		LLMModel:                 envOrDefault("LLM_MODEL", "openai/gpt-4o-mini"),
-		RefreshCronSchedule:      envOrDefault("REFRESH_CRON_SCHEDULE", "*/30 * * * *"),
-		SummaryCronSchedule:      envOrDefault("SUMMARY_CRON_SCHEDULE", "0 7,15,23 * * *"),
+		DefaultRelease:              os.Getenv("DEFAULT_RELEASE"),
+		SummaryForReleases:          parseSummaryList(os.Getenv("SUMMARY_FOR_RELEASES")),
+		SummaryForProducts:          parseSummaryList(os.Getenv("SUMMARY_FOR_PRODUCTS")),
+		TestObserverURL:             envOrDefault("TEST_OBSERVER_URL", "https://tests-api.ubuntu.com"),
+		TemporalHost:                envOrDefault("TEMPORAL_HOST", "localhost:7233"),
+		MattermostServerURL:         os.Getenv("MATTERMOST_SERVER_URL"),
+		MattermostBotToken:          os.Getenv("MATTERMOST_BOT_TOKEN"),
+		MattermostBotUserID:         os.Getenv("MATTERMOST_BOT_USER_ID"),
+		WatchtowerKeyword:           envOrDefault("WATCHTOWER_KEYWORD", "@watchtower"),
+		MattermostReconnectDelay:    reconnectDelay,
+		OpenRouterAPIKey:            os.Getenv("OPENROUTER_API_KEY"),
+		LLMModel:                    envOrDefault("LLM_MODEL", "openai/gpt-4o-mini"),
+		RefreshCronSchedule:         envOrDefault("REFRESH_CRON_SCHEDULE", "*/30 * * * *"),
+		SummaryCronSchedule:         envOrDefault("SUMMARY_CRON_SCHEDULE", "0 7,15,23 * * *"),
+		FailureAnalysisCronSchedule: envOrDefault("FAILURE_ANALYSIS_CRON_SCHEDULE", "0 */8 * * *"),
+		MaxFailuresPerAnalysisRun:   maxFailures,
 	}, nil
 }
 
@@ -82,6 +91,19 @@ func parseDurationEnv(key string, def time.Duration) (time.Duration, error) {
 		return 0, fmt.Errorf("config: %s=%q is not a valid duration: %w", key, v, err)
 	}
 	return d, nil
+}
+
+// parseIntEnv reads key as an integer. Returns def if unset/empty, error if unparseable.
+func parseIntEnv(key string, def int) (int, error) {
+	v := os.Getenv(key)
+	if v == "" {
+		return def, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, fmt.Errorf("config: %s=%q is not a valid integer: %w", key, v, err)
+	}
+	return n, nil
 }
 
 // parseSummaryList splits a comma-separated value into a slice of trimmed,

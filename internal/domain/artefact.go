@@ -78,6 +78,143 @@ type LogAnalysis struct {
 	NextAction  string   `json:"next_action"`
 }
 
+// FailureRecord tracks a single failing artefact across one or more build cycles.
+// Records are keyed by ArtefactID in a FailureStore and are never deleted — instead
+// they are marked Resolved when the artefact recovers. This preserves history and
+// enables occurrence weighting across builds.
+type FailureRecord struct {
+	ArtefactID       int          `json:"artefact_id"`
+	ArtefactName     string       `json:"artefact_name"`
+	Release          string       `json:"release"`
+	Product          string       `json:"product"`                    // maps to Artefact.OS
+	FirstSeenVersion string       `json:"first_seen_version"`         // YYYYMMDD of first failure
+	LastSeenVersion  string       `json:"last_seen_version"`          // YYYYMMDD of most recent failure
+	Occurrences      int          `json:"occurrences"`                // increments each new failing version
+	Analysis         *LogAnalysis `json:"analysis,omitempty"`         // nil until FailureAnalysisWorkflow runs
+	AnalysedVersion  string       `json:"analysed_version,omitempty"` // version the analysis was done on
+	AnalysedAt       *time.Time   `json:"analysed_at,omitempty"`
+	Resolved         bool         `json:"resolved"` // true once a recovery is detected
+}
+
+// FailureStore is the top-level structure persisted to failures.json.
+// Outer key: release name. Inner key: product name (Artefact.OS).
+// Value: slice of FailureRecords for that release+product combination.
+type FailureStore map[string]map[string][]FailureRecord
+
+// UpsertFailure updates the FailureStore with a new or recurring failure for
+// the given artefact. If an unresolved record already exists for this artefact ID,
+// its occurrence count is incremented and LastSeenVersion is updated. The Analysis
+// field is cleared only if the new version differs from the analysed version
+// (indicating the failure may have a new root cause). If no record exists, a new
+// one is created with Analysis=nil (pending analysis).
+// Returns true if the record is newly created (first time this artefact fails).
+func (fs FailureStore) UpsertFailure(art Artefact) bool {
+	if fs[art.Release] == nil {
+		fs[art.Release] = make(map[string][]FailureRecord)
+	}
+	records := fs[art.Release][art.OS]
+
+	for i := range records {
+		if records[i].ArtefactID == art.ID && !records[i].Resolved {
+			records[i].LastSeenVersion = art.Version
+			records[i].Occurrences++
+			// If the version changed since the last analysis, the old analysis
+			// may no longer be accurate — clear it so re-analysis is triggered.
+			if records[i].Analysis != nil && records[i].AnalysedVersion != art.Version {
+				records[i].Analysis = nil
+				records[i].AnalysedAt = nil
+				records[i].AnalysedVersion = ""
+			}
+			fs[art.Release][art.OS] = records
+			return false // existing record updated
+		}
+	}
+
+	// New failure record.
+	fs[art.Release][art.OS] = append(records, FailureRecord{
+		ArtefactID:       art.ID,
+		ArtefactName:     art.Name,
+		Release:          art.Release,
+		Product:          art.OS,
+		FirstSeenVersion: art.Version,
+		LastSeenVersion:  art.Version,
+		Occurrences:      1,
+	})
+	return true
+}
+
+// ResolveFailure marks all unresolved FailureRecords for the given artefact ID
+// as resolved. This is called when a recovery is detected in the diff.
+func (fs FailureStore) ResolveFailure(artefactID int, release, product string) {
+	records := fs[release][product]
+	for i := range records {
+		if records[i].ArtefactID == artefactID && !records[i].Resolved {
+			records[i].Resolved = true
+		}
+	}
+	if fs[release] != nil {
+		fs[release][product] = records
+	}
+}
+
+// ActiveFailures returns all unresolved FailureRecords across the store, optionally
+// filtered by release and/or product. Pass empty strings to include all.
+func (fs FailureStore) ActiveFailures(release, product string) []FailureRecord {
+	var out []FailureRecord
+	for rel, byProduct := range fs {
+		if release != "" && rel != release {
+			continue
+		}
+		for prod, records := range byProduct {
+			if product != "" && prod != product {
+				continue
+			}
+			for _, r := range records {
+				if !r.Resolved {
+					out = append(out, r)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// PendingAnalysis returns all unresolved FailureRecords that have no Analysis yet,
+// capped at max records. Pass max=0 for no cap.
+func (fs FailureStore) PendingAnalysis(max int) []FailureRecord {
+	var out []FailureRecord
+	for _, byProduct := range fs {
+		for _, records := range byProduct {
+			for _, r := range records {
+				if !r.Resolved && r.Analysis == nil {
+					out = append(out, r)
+					if max > 0 && len(out) >= max {
+						return out
+					}
+				}
+			}
+		}
+	}
+	return out
+}
+
+// SetAnalysis stores a completed LogAnalysis on the record matching artefactID
+// in the given release+product bucket.
+func (fs FailureStore) SetAnalysis(artefactID int, release, product string, analysis LogAnalysis, version string) {
+	records := fs[release][product]
+	now := time.Now().UTC()
+	for i := range records {
+		if records[i].ArtefactID == artefactID && !records[i].Resolved {
+			records[i].Analysis = &analysis
+			records[i].AnalysedVersion = version
+			records[i].AnalysedAt = &now
+		}
+	}
+	if fs[release] != nil {
+		fs[release][product] = records
+	}
+}
+
 // IsBuiltToday returns true if the version's base date (YYYYMMDD) matches today in UTC.
 func IsBuiltToday(version string) bool {
 	base := version

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/mclemenceau/watchtower/internal/application"
+	"github.com/mclemenceau/watchtower/internal/domain"
 	"github.com/mclemenceau/watchtower/internal/intent"
 	"github.com/mclemenceau/watchtower/internal/ports"
 	"github.com/mclemenceau/watchtower/internal/state"
@@ -22,13 +23,29 @@ import (
 // prefix (e.g. "@watchtower"); pass empty string to dispatch every line regardless
 // of prefix. resolver is optional; pass nil to disable LLM-assisted intent resolution.
 // logFetcher, llm, and launchpad are optional; pass nil to disable the investigate command.
-func RunREPL(ctx context.Context, in io.Reader, notifier ports.Notifier, snap *state.Snapshot, defaultRelease string, summaryForProducts []string, summaryForReleases []string, keyword string, resolver *intent.Resolver, logFetcher ports.LogFetcher, llm ports.LLMClient, launchpad ports.LaunchpadSource) {
+// failures is the FailureStore port; pass nil to disable failure commands.
+// triggerAnalysis is called when the user requests on-demand analysis; pass nil to disable.
+func RunREPL(
+	ctx context.Context,
+	in io.Reader,
+	notifier ports.Notifier,
+	snap *state.Snapshot,
+	failures ports.FailureStorePort,
+	defaultRelease string,
+	summaryForProducts []string,
+	summaryForReleases []string,
+	keyword string,
+	resolver *intent.Resolver,
+	logFetcher ports.LogFetcher,
+	llm ports.LLMClient,
+	launchpad ports.LaunchpadSource,
+	triggerAnalysis func(release string) error,
+) {
 	fmt.Println("[Watchtower] Bot started. Type a message (Ctrl-D to quit):")
 	fmt.Print("you> ")
 
 	scanner := bufio.NewScanner(in)
 	for {
-		// Check context before blocking on next line.
 		select {
 		case <-ctx.Done():
 			fmt.Println("\n[Watchtower] Shutting down.")
@@ -54,7 +71,22 @@ func RunREPL(ctx context.Context, in io.Reader, notifier ports.Notifier, snap *s
 			continue
 		}
 
-		if dispatchErr := application.Dispatch(ctx, "repl", line, artefacts, defaultRelease, summaryForProducts, summaryForReleases, notifier, keyword, resolver, logFetcher, llm, launchpad); dispatchErr != nil {
+		var failureStore domain.FailureStore
+		if failures != nil {
+			if fs, ferr := failures.ReadFailures(); ferr == nil {
+				failureStore = fs
+			}
+		}
+		if failureStore == nil {
+			failureStore = make(domain.FailureStore)
+		}
+
+		if dispatchErr := application.Dispatch(
+			ctx, "repl", line, artefacts, failureStore,
+			defaultRelease, summaryForProducts, summaryForReleases,
+			notifier, keyword, resolver, logFetcher, llm, launchpad,
+			triggerAnalysis,
+		); dispatchErr != nil {
 			fmt.Printf("[Watchtower] error: %v\n", dispatchErr)
 		}
 
