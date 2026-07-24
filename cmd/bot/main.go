@@ -1,22 +1,19 @@
 package main
 
 import (
-	"compress/gzip"
 	"context"
 	"flag"
 	"fmt"
 	"io"
 	"log"
-	"net/http"
 	"os"
-	"strings"
-	"time"
 
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/worker"
 
 	"github.com/mclemenceau/watchtower/internal/activities"
 	launchpadadapter "github.com/mclemenceau/watchtower/internal/adapters/launchpad"
+	logfetcheradapter "github.com/mclemenceau/watchtower/internal/adapters/logfetcher"
 	mattermostadapter "github.com/mclemenceau/watchtower/internal/adapters/mattermost"
 	"github.com/mclemenceau/watchtower/internal/adapters/openrouter"
 	"github.com/mclemenceau/watchtower/internal/adapters/testobserver"
@@ -29,47 +26,6 @@ import (
 )
 
 const taskQueue = "watchtower"
-
-// httpLogFetcher implements ports.LogFetcher using a standard http.Client.
-type httpLogFetcher struct {
-	client *http.Client
-}
-
-func (f *httpLogFetcher) Fetch(ctx context.Context, url string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return "", fmt.Errorf("LogFetcher: new request: %w", err)
-	}
-	resp, err := f.client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("LogFetcher: %w", err)
-	}
-	defer resp.Body.Close() //nolint:errcheck
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("LogFetcher: unexpected status %d", resp.StatusCode)
-	}
-
-	body := io.Reader(resp.Body)
-	// Decompress gzip responses when Go's transport has not already done so.
-	needsGzip := !resp.Uncompressed && (strings.HasSuffix(strings.ToLower(url), ".gz") ||
-		resp.Header.Get("Content-Type") == "application/x-gzip" ||
-		resp.Header.Get("Content-Type") == "application/gzip")
-	if needsGzip {
-		gr, err := gzip.NewReader(resp.Body)
-		if err != nil {
-			return "", fmt.Errorf("LogFetcher: gzip open: %w", err)
-		}
-		defer gr.Close() //nolint:errcheck
-		body = gr
-	}
-
-	raw, err := io.ReadAll(body)
-	if err != nil {
-		return "", fmt.Errorf("LogFetcher: read: %w", err)
-	}
-	return string(raw), nil
-}
 
 func main() {
 	verbose := flag.Bool("v", false, "enable verbose logging")
@@ -105,7 +61,7 @@ func main() {
 	buildSrc := testobserver.NewHTTPBuildSource(cfg.TestObserverURL)
 	snap := state.New("state/snapshot.json")
 	failureState := state.NewFailureState("state/failures.json")
-	logFetcher := &httpLogFetcher{client: &http.Client{Timeout: 30 * time.Second}}
+	logFetcher := logfetcheradapter.New(0) // 0 = default 30s timeout
 	launchpadSrc := launchpadadapter.NewHTTPLaunchpadSource()
 
 	// Build optional LLM-backed intent resolver (disabled when API key is absent).

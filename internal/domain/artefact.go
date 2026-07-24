@@ -3,6 +3,7 @@
 package domain
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -10,21 +11,66 @@ import (
 
 const baseLogURL = "https://ubuntu-archive-team.ubuntu.com/cd-build-logs"
 
+// ErrLogNotFound is returned by a LogFetcher when the log URL responds with HTTP 404.
+// Callers use errors.Is(err, ErrLogNotFound) to distinguish "not yet available"
+// from a genuine network or server error.
+var ErrLogNotFound = errors.New("log not found")
+
+// BuildStatusState represents the enriched build status derived from the cd-build-log.
+// It is computed at activity time (not from the Test Observer API) and persisted in
+// the snapshot so that the bot can answer status queries without refetching logs.
+type BuildStatusState string
+
+const (
+	// BuildStatusBuilt means an artefact with today's serial exists in Test Observer.
+	BuildStatusBuilt BuildStatusState = "BUILT"
+	// BuildStatusNotStarted means today's log is unavailable or has no "starting at"
+	// line for this artefact's architecture — the build has not been triggered yet.
+	BuildStatusNotStarted BuildStatusState = "NOT_STARTED"
+	// BuildStatusInProgress means a "starting at" line exists for this arch but no
+	// corresponding "finished at" line — the build is currently running.
+	BuildStatusInProgress BuildStatusState = "IN_PROGRESS"
+	// BuildStatusFailed means a "finished at" line exists without "(Successfully built)",
+	// or an infra error was detected before the build could finish.
+	BuildStatusFailed BuildStatusState = "FAILED"
+	// BuildStatusUnknown means the log fetch failed for a reason other than 404
+	// (e.g. network error, unexpected response), so status cannot be determined.
+	BuildStatusUnknown BuildStatusState = "UNKNOWN"
+)
+
+// BuildLogIcon returns the display emoji for a BuildStatusState.
+func BuildLogIcon(s BuildStatusState) string {
+	switch s {
+	case BuildStatusBuilt:
+		return "✅"
+	case BuildStatusNotStarted:
+		return "⏳"
+	case BuildStatusInProgress:
+		return "🔄"
+	case BuildStatusFailed:
+		return "❌"
+	default:
+		return "❓"
+	}
+}
+
 // Artefact mirrors the Test Observer API ArtefactResponse for the image family.
 // Only fields used by Watchtower are included; extra API fields are silently discarded.
 // Builds is populated by the cron workflow and cached in the snapshot; it is
 // omitted from JSON when empty so existing snapshot files remain compatible.
+// BuildLog is computed from the cd-build-log at fetch time and persisted in the snapshot.
 type Artefact struct {
-	ID       int             `json:"id"`
-	Name     string          `json:"name"`
-	Version  string          `json:"version"` // YYYYMMDD or YYYYMMDD.N (respin); today's date means build succeeded and image is available for testing
-	OS       string          `json:"os"`
-	Release  string          `json:"release"`
-	Stage    string          `json:"stage"`  // pending | current — pipeline release stage, not build state
-	Status   string          `json:"status"` // APPROVED | MARKED_AS_FAILED | UNDECIDED — test review state, unrelated to build availability
-	Archived bool            `json:"archived"`
-	ImageURL string          `json:"image_url"`
-	Builds   []ArtefactBuild `json:"builds,omitempty"` // cached from /v1/artefacts/{id}/builds
+	ID       int              `json:"id"`
+	Name     string           `json:"name"`
+	Version  string           `json:"version"` // YYYYMMDD or YYYYMMDD.N (respin); today's date means build succeeded and image is available for testing
+	OS       string           `json:"os"`
+	Release  string           `json:"release"`
+	Stage    string           `json:"stage"`  // pending | current — pipeline release stage, not build state
+	Status   string           `json:"status"` // APPROVED | MARKED_AS_FAILED | UNDECIDED — test review state, unrelated to build availability
+	Archived bool             `json:"archived"`
+	ImageURL string           `json:"image_url"`
+	BuildLog BuildStatusState `json:"build_log,omitempty"` // enriched build status derived from today's cd-build-log
+	Builds   []ArtefactBuild  `json:"builds,omitempty"`    // cached from /v1/artefacts/{id}/builds
 }
 
 // ArtefactBuild represents one architecture-specific build of an artefact,
@@ -455,4 +501,126 @@ func PrimaryBuildArch(builds []ArtefactBuild) string {
 		}
 	}
 	return first
+}
+
+// ArtefactArch extracts the CPU architecture from an artefact name, normalising
+// "+" to "-" to match the convention used in cd-build-log labels.
+//
+// The artefact name follows the pattern:
+//
+//	{release}-{product...}-{arch}[+{variant}...].{ext...}
+//
+// The arch token is identified by scanning for known base arch strings
+// (amd64, arm64, riscv64, ppc64el, s390x, armhf, i386) and returning from
+// that position to the end of the stripped name (before the extension),
+// capturing any "+variant" suffix.
+//
+// Examples:
+//
+//	stonking-desktop-amd64.iso                         → "amd64"
+//	stonking-live-server-arm64+largemem.iso             → "arm64-largemem"
+//	stonking-preinstalled-server-arm64+raspi.img.xz     → "arm64-raspi"
+//	jammy-preinstalled-server-arm64+tegra-jetson.img.xz → "arm64-tegra-jetson"
+//	stonking-wsl-amd64.wsl                             → "amd64"
+//
+// Returns "" when no known architecture is found.
+func ArtefactArch(name string) string {
+	// Strip all known extensions (may be compound, e.g. ".img.xz").
+	for _, ext := range []string{".img.xz", ".tar.gz", ".iso", ".wsl", ".img"} {
+		name = strings.TrimSuffix(name, ext)
+	}
+	// Scan for known base arch strings; return from the "-arch" boundary to end.
+	// Order matters: longer tokens first to avoid "arm64" matching inside "arm64+raspi"
+	// at the wrong position.
+	for _, baseArch := range []string{"riscv64", "ppc64el", "s390x", "amd64", "arm64", "armhf", "i386"} {
+		// Look for "-{baseArch}" as a boundary — the arch always follows a dash.
+		needle := "-" + baseArch
+		idx := strings.Index(name, needle)
+		if idx < 0 {
+			continue
+		}
+		arch := name[idx+1:] // strip the leading "-"
+		// Normalise "+" → "-" to match cd-build-log label convention.
+		return strings.ReplaceAll(arch, "+", "-")
+	}
+	return ""
+}
+
+// ParseBuildStatusFromLog determines the build status for a specific architecture
+// by scanning the content of a cd-build-log.
+//
+// The function looks for lines of the form:
+//
+//	{label} on Launchpad starting at {datetime}
+//	{label} on Launchpad finished at {datetime} ({result})
+//
+// where {label} is a substring-matched against the normalised arch (e.g. "amd64"
+// matches "ubuntu-amd64", "ubuntu-server-live-amd64", etc.).
+//
+// Detection rules:
+//   - Empty content                                    → BuildStatusNotStarted
+//   - No "starting at" line for this arch              → BuildStatusNotStarted
+//   - "starting at" present, no "finished at" yet      → BuildStatusInProgress
+//   - "finished at" with "(Successfully built)"        → BuildStatusBuilt
+//   - "finished at" with any other suffix              → BuildStatusFailed
+func ParseBuildStatusFromLog(logContent, arch string) BuildStatusState {
+	if logContent == "" || arch == "" {
+		return BuildStatusNotStarted
+	}
+
+	// Normalise arch for matching: "arm64+raspi" → "arm64-raspi".
+	normArch := strings.ReplaceAll(arch, "+", "-")
+
+	started := false
+	finished := false
+	finishedSuccess := false
+
+	for _, line := range strings.Split(logContent, "\n") {
+		line = strings.TrimSpace(line)
+
+		// Match lines containing "on Launchpad starting at" or "on Launchpad finished at".
+		// The label before "on Launchpad" is checked by substring against normArch.
+		if idx := strings.Index(line, " on Launchpad starting at "); idx >= 0 {
+			label := line[:idx]
+			if labelMatchesArch(label, normArch) {
+				started = true
+			}
+			continue
+		}
+		if idx := strings.Index(line, " on Launchpad finished at "); idx >= 0 {
+			label := line[:idx]
+			if labelMatchesArch(label, normArch) {
+				finished = true
+				// Check the result suffix: "(Successfully built)" means success.
+				// Anything else (e.g. "(Failed to build)", "(Chroot problem)") is a failure.
+				finishedSuccess = strings.Contains(line, "(Successfully built)")
+			}
+			continue
+		}
+	}
+
+	switch {
+	case !started:
+		return BuildStatusNotStarted
+	case !finished:
+		return BuildStatusInProgress
+	case finishedSuccess:
+		// The build finished successfully on Launchpad, but the artefact may not yet be
+		// in Test Observer (publishing can lag). Callers should prefer checking
+		// IsBuiltToday first; this value is returned only for log-only assessment.
+		return BuildStatusBuilt
+	default:
+		return BuildStatusFailed
+	}
+}
+
+// labelMatchesArch reports whether a cd-build-log label (e.g. "ubuntu-server-live-amd64")
+// contains the normalised arch token (e.g. "amd64" or "arm64-largemem") as a
+// complete token suffix. Matching is done by checking that the label ends with
+// "-{normArch}" so that "arm64" does not match "arm64-largemem".
+// Case-insensitive to be robust against future label format changes.
+func labelMatchesArch(label, normArch string) bool {
+	label = strings.ToLower(label)
+	arch := strings.ToLower(normArch)
+	return strings.HasSuffix(label, "-"+arch) || label == arch
 }

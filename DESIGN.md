@@ -59,7 +59,8 @@ Go interfaces defining what the application needs from the outside world:
 | `Notifier` | Send messages to a channel (Mattermost, stdout…) |
 | `SnapshotStore` | Persist and retrieve the artefact snapshot |
 | `LLMClient` | Call a large language model |
-| `LogFetcher` | Retrieve build log content from a URL |
+| `LogFetcher` | Retrieve build log content from a URL; returns `domain.ErrLogNotFound` on HTTP 404 |
+| `LaunchpadSource` | Resolve a Launchpad livefs build page URL to its librarian log URL |
 
 ### Application layer — `internal/application/`
 
@@ -79,6 +80,7 @@ Concrete implementations of ports. Each sub-package targets one external system:
 | `adapters/testobserver/` | `ArtefactSource`, `BuildSource` | HTTP + Mock |
 | `adapters/mattermost/` | `Notifier` + RunREPL/RunBot | WebSocket bot + Stdout |
 | `adapters/openrouter/` | `LLMClient` | HTTP + Mock |
+| `adapters/logfetcher/` | `LogFetcher` | HTTP + gzip + 404→ErrLogNotFound + Mock |
 
 **Adding a new messaging protocol** (e.g. Matrix): implement `ports.Notifier`
 and a runner (analogous to `RunPoller`) in `internal/adapters/matrix/`; wire in
@@ -130,12 +132,17 @@ internal/
       poller_test.go      Integration tests for RunPoller
     openrouter/
       client.go           OpenRouterClient, MockLLMClient
+    logfetcher/
+      client.go           HTTPLogFetcher (404→ErrLogNotFound, gzip), MockLogFetcher
+      client_test.go
+    launchpad/
+      client.go           HTTPLaunchpadSource, MockLaunchpadSource
   state/
     snapshot.go        Atomic JSON read/write; Diff; LatestRelease; SnapshotStore impl
     snapshot_test.go   State logic tests
   activities/
-    build_status.go    FetchBuildStatus, FetchTestExecutions, LoadSnapshot,
-                       SaveSnapshot, FormatStatusTable, NotifyChannel
+    build_status.go    FetchBuildStatus, EnrichBuildStatus, FetchTestExecutions,
+                       LoadSnapshot, SaveSnapshot, FormatStatusTable, NotifyChannel
     analyze_log.go     AnalyzeLog (LLM log root-cause analysis)
     fetch_log.go       FetchLog — delegates to ports.LogFetcher
     analyze_log_test.go
@@ -165,8 +172,18 @@ type Artefact struct {
     Status   string `json:"status"`  // APPROVED | MARKED_AS_FAILED | UNDECIDED
     Archived bool   `json:"archived"`
     ImageURL string `json:"image_url"`
-    Builds   []ArtefactBuild `json:"builds,omitempty"`
+    BuildLog BuildStatusState `json:"build_log,omitempty"` // enriched from cd-build-log
+    Builds   []ArtefactBuild  `json:"builds,omitempty"`
 }
+
+// BuildStatusState is the enriched per-artefact build state derived from today's cd-build-log.
+// Persisted in snapshot.json; computed by EnrichBuildStatus activity.
+//
+//   BUILT        — artefact with today's serial exists in Test Observer
+//   NOT_STARTED  — log unavailable (404) or no "starting at" line for this arch
+//   IN_PROGRESS  — "starting at" present but no "finished at" yet
+//   FAILED       — "finished at" with a non-(Successfully built) result
+//   UNKNOWN      — log fetch failed for a non-404 reason
 
 type ChangeReport struct {
     NewFailures  []ArtefactDelta `json:"new_failures"`
@@ -186,21 +203,44 @@ type ArtefactDelta struct {
 
 ## Artefact lifecycle
 
-An artefact's presence in Test Observer is the signal that a build succeeded:
+An artefact's presence in Test Observer is the primary signal for build success.
+The `BuildLog` field provides richer status derived from the cd-build-log:
 
-- **Present with today's version** (`YYYYMMDD` or `YYYYMMDD.N`) — build completed; image is available for testing.
-- **Present with an older version** — today's build has not landed yet. The cause is indistinguishable from Watchtower's perspective: the build may not have started, may be in progress, or may have failed at the pipeline level before reaching Test Observer.
-- **Absent entirely** — the artefact has never been seen, or is no longer tracked by Test Observer.
+| `BuildLog` state | Icon | Meaning |
+|-----------------|------|---------|
+| `BUILT` | ✅ | Artefact with today's serial (`YYYYMMDD`) exists in Test Observer |
+| `NOT_STARTED` | ⏳ | Log unavailable (404) or no "starting at" line for this arch — build not triggered yet |
+| `IN_PROGRESS` | 🔄 | "starting at" line found but no "finished at" yet — build running |
+| `FAILED` | ❌ | "finished at" present without `(Successfully built)` — Launchpad reports failure |
+| `UNKNOWN` | ❓ | Log fetch failed (non-404) — status indeterminate |
 
-The `Status` field (`APPROVED` / `UNDECIDED` / `MARKED_AS_FAILED`) is the **test review state** set by humans after testing. It is orthogonal to build availability and is not used in the status table.
+The status is derived from cd-build-log lines of the form:
+
+```
+ubuntu-server-live-amd64 on Launchpad starting at 2026-07-24 08:18:43
+ubuntu-server-live-amd64 on Launchpad finished at 2026-07-24 08:54:04 (Successfully built)
+ubuntu-server-live-arm64 on Launchpad finished at 2026-07-24 08:32:59 (Failed to build)
+```
+
+The arch label in the log is matched against the artefact's arch (extracted from its name
+with `+` normalised to `-`) using a suffix match to avoid e.g. `arm64` matching `arm64-largemem`.
+
+The `Status` field (`APPROVED` / `UNDECIDED` / `MARKED_AS_FAILED`) is the **test review state**
+set by humans after testing. It is orthogonal to build availability.
 
 ## Workflow data flow
 
-### ChangeWatchWorkflow (every 10 min)
+### DataRefreshWorkflow (every 30 min)
+
 ```
-FetchBuildStatus → FetchTestExecutions → LoadSnapshot → Diff → SaveSnapshot
-                                                              └─ if changes → NotifyChannel (markdown change report)
+FetchBuildStatus → EnrichBuildStatus → FetchTestExecutions → SaveSnapshot
+                                                            → Diff → UpdateFailureRecords
 ```
+
+`EnrichBuildStatus` fetches today's cd-build-log for each artefact not yet built
+and populates `Artefact.BuildLog` with the 5-state status. Non-fatal — if log
+fetching fails, `BuildLog` remains empty and formatters fall back to binary
+version-date logic.
 
 ## Mattermost interaction model
 

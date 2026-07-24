@@ -2,6 +2,7 @@ package activities
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -64,6 +65,58 @@ func (a *Activities) FetchTestExecutions(ctx context.Context, artefacts []domain
 	return enriched, nil
 }
 
+// EnrichBuildStatus populates the BuildLog field on each artefact by fetching
+// today's cd-build-log and parsing the per-arch Launchpad status lines.
+// For artefacts already built today (version date == today) the status is set
+// to BuildStatusBuilt without fetching any log.
+// For others the log is fetched; individual fetch failures are non-fatal:
+//   - HTTP 404         → BuildStatusNotStarted (log not yet published)
+//   - Other error      → BuildStatusUnknown
+//   - Fetch succeeded  → ParseBuildStatusFromLog using artefact arch
+//
+// The enriched slice is returned; the input slice is not modified.
+func (a *Activities) EnrichBuildStatus(ctx context.Context, artefacts []domain.Artefact) ([]domain.Artefact, error) {
+	enriched := make([]domain.Artefact, len(artefacts))
+	copy(enriched, artefacts)
+
+	if a.LogFetcher == nil {
+		// No fetcher wired — leave BuildLog unset; formatters fall back to version-based status.
+		return enriched, nil
+	}
+
+	today := time.Now().UTC().Format("20060102")
+
+	for i, art := range enriched {
+		// Artefacts with today's serial are already confirmed built.
+		if domain.IsBuiltToday(art.Version) {
+			enriched[i].BuildLog = domain.BuildStatusBuilt
+			continue
+		}
+
+		logURL := domain.LogURLFromImageURLForDate(art.ImageURL, today)
+		if logURL == "" {
+			// No log URL derivable (missing or unrecognised ImageURL) — unknown.
+			enriched[i].BuildLog = domain.BuildStatusUnknown
+			continue
+		}
+
+		content, err := a.LogFetcher.Fetch(ctx, logURL)
+		if err != nil {
+			if errors.Is(err, domain.ErrLogNotFound) {
+				enriched[i].BuildLog = domain.BuildStatusNotStarted
+			} else {
+				enriched[i].BuildLog = domain.BuildStatusUnknown
+			}
+			continue
+		}
+
+		arch := domain.ArtefactArch(art.Name)
+		enriched[i].BuildLog = domain.ParseBuildStatusFromLog(content, arch)
+	}
+
+	return enriched, nil
+}
+
 func (a *Activities) LoadSnapshot(_ context.Context) ([]domain.Artefact, error) {
 	artefacts, err := a.Snapshot.Read()
 	if err != nil {
@@ -116,7 +169,7 @@ func (a *Activities) FormatStatusTable(_ context.Context, artefacts []domain.Art
 	sb.WriteString("|------|---------|---------|-----|--------|-----|\n")
 	for _, art := range filtered {
 		fmt.Fprintf(&sb, "| %s | %s | %s | %s | %s | %s |\n",
-			art.Name, art.OS, art.Release, domain.ImageAge(art.Version), domain.BuildStatus(art.Version), domain.LogCell(art.ImageURL))
+			art.Name, art.OS, art.Release, domain.ImageAge(art.Version), buildStatusCell(art), domain.LogCell(art.ImageURL))
 	}
 	return sb.String(), nil
 }
@@ -315,4 +368,15 @@ func (a *Activities) AnalyseFailures(ctx context.Context, artefacts []domain.Art
 		return fmt.Errorf("AnalyseFailures: write: %w", err)
 	}
 	return nil
+}
+
+// buildStatusCell returns the status emoji/icon for an artefact in the status table.
+// When a BuildLog state has been populated (via EnrichBuildStatus), it takes precedence
+// and shows the richer 5-state icon. Otherwise it falls back to the simple version-based
+// binary status (IsBuiltToday → ✅ / ❌).
+func buildStatusCell(art domain.Artefact) string {
+	if art.BuildLog != "" {
+		return domain.BuildLogIcon(art.BuildLog)
+	}
+	return domain.BuildStatus(art.Version)
 }

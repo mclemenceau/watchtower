@@ -34,11 +34,16 @@ func (m *MockArtefactSource) FetchArtefacts(_ context.Context) ([]domain.Artefac
 	today := now.Format("20060102")
 	yesterday := now.AddDate(0, 0, -1).Format("20060102")
 	return []domain.Artefact{
-		{ID: 1001, Name: "plucky-desktop-amd64.iso", Version: today, OS: "ubuntu", Release: "plucky", Stage: "pending", Status: "APPROVED"},
-		{ID: 1002, Name: "plucky-desktop-arm64.iso", Version: today, OS: "ubuntu", Release: "plucky", Stage: "pending", Status: "UNDECIDED"},
-		{ID: 1003, Name: "plucky-server-amd64.iso", Version: today, OS: "ubuntu-server", Release: "plucky", Stage: "pending", Status: "MARKED_AS_FAILED"},
-		{ID: 1004, Name: "plucky-minimal-amd64.iso", Version: yesterday, OS: "ubuntu-minimal", Release: "plucky", Stage: "pending", Status: "APPROVED"},
-		{ID: 1005, Name: "noble-desktop-amd64.iso", Version: yesterday, OS: "ubuntu", Release: "noble", Stage: "current", Status: "APPROVED"},
+		{ID: 1001, Name: "plucky-desktop-amd64.iso", Version: today, OS: "ubuntu", Release: "plucky", Stage: "pending", Status: "APPROVED",
+			ImageURL: "https://cdimage.ubuntu.com/ubuntu/plucky/daily-live/" + today + "/plucky-desktop-amd64.iso"},
+		{ID: 1002, Name: "plucky-desktop-arm64.iso", Version: today, OS: "ubuntu", Release: "plucky", Stage: "pending", Status: "UNDECIDED",
+			ImageURL: "https://cdimage.ubuntu.com/ubuntu/plucky/daily-live/" + today + "/plucky-desktop-arm64.iso"},
+		{ID: 1003, Name: "plucky-server-amd64.iso", Version: today, OS: "ubuntu-server", Release: "plucky", Stage: "pending", Status: "MARKED_AS_FAILED",
+			ImageURL: "https://cdimage.ubuntu.com/ubuntu-server/plucky/daily-live/" + today + "/plucky-live-server-amd64.iso"},
+		{ID: 1004, Name: "plucky-minimal-amd64.iso", Version: yesterday, OS: "ubuntu-minimal", Release: "plucky", Stage: "pending", Status: "APPROVED",
+			ImageURL: "https://cdimage.ubuntu.com/ubuntu-minimal/plucky/daily-live/" + yesterday + "/plucky-minimal-amd64.iso"},
+		{ID: 1005, Name: "noble-desktop-amd64.iso", Version: yesterday, OS: "ubuntu", Release: "noble", Stage: "current", Status: "APPROVED",
+			ImageURL: "https://cdimage.ubuntu.com/ubuntu/noble/daily-live/" + yesterday + "/noble-desktop-amd64.iso"},
 	}, nil
 }
 

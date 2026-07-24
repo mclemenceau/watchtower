@@ -368,3 +368,146 @@ func TestImageAge(t *testing.T) {
 		}
 	}
 }
+
+// --- ArtefactArch ---
+
+func TestArtefactArch(t *testing.T) {
+	cases := []struct {
+		name string
+		want string
+	}{
+		// Standard ISO builds.
+		{"stonking-desktop-amd64.iso", "amd64"},
+		{"stonking-live-server-amd64.iso", "amd64"},
+		{"stonking-desktop-arm64.iso", "arm64"},
+		{"noble-live-server-arm64.iso", "arm64"},
+		{"stonking-desktop-riscv64.iso", "riscv64"},
+		{"stonking-live-server-s390x.iso", "s390x"},
+		{"stonking-live-server-ppc64el.iso", "ppc64el"},
+		// Variant arches with "+" — normalised to "-".
+		{"stonking-live-server-arm64+largemem.iso", "arm64-largemem"},
+		{"stonking-preinstalled-server-arm64+raspi.img.xz", "arm64-raspi"},
+		{"noble-preinstalled-server-riscv64+icicle.img.xz", "riscv64-icicle"},
+		{"jammy-preinstalled-server-arm64+tegra-jetson.img.xz", "arm64-tegra-jetson"},
+		// Other extension formats.
+		{"stonking-wsl-amd64.wsl", "amd64"},
+		{"stonking-base-arm64.tar.gz", "arm64"},
+		{"stonking-mini-iso-amd64.iso", "amd64"},
+		// Edge cases.
+		{"noarch", ""},
+		{"", ""},
+	}
+
+	for _, tc := range cases {
+		got := ArtefactArch(tc.name)
+		if got != tc.want {
+			t.Errorf("ArtefactArch(%q) = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// --- ParseBuildStatusFromLog ---
+
+// typicalServerLog is a real-format cd-build-log for ubuntu-server stonking
+// (based on the actual log from 2026-07-24), with multiple arches showing
+// different outcomes.
+const typicalServerLog = `===== Building live filesystems =====
+Fri Jul 24 08:18:43 UTC 2026
+ubuntu-server-live-amd64 on Launchpad starting at 2026-07-24 08:18:43
+Couldn't find a 'iso-stonking' target, using the default.
+ubuntu-server-live-amd64: https://launchpad.net/~ubuntu-cdimage/+livefs/ubuntu/stonking/ubuntu-server-live/+build/996791
+ubuntu-server-live-arm64 on Launchpad starting at 2026-07-24 08:18:46
+Couldn't find a 'iso-stonking' target, using the default.
+ubuntu-server-live-arm64: https://launchpad.net/~ubuntu-cdimage/+livefs/ubuntu/stonking/ubuntu-server-live/+build/996792
+ubuntu-server-live-arm64-largemem on Launchpad starting at 2026-07-24 08:18:47
+Couldn't find a 'iso-stonking' target, using the default.
+ubuntu-server-live-arm64-largemem: https://launchpad.net/~ubuntu-cdimage/+livefs/ubuntu/stonking/ubuntu-server-live/+build/996793
+ubuntu-server-live-riscv64 on Launchpad starting at 2026-07-24 08:18:51
+Couldn't find a 'iso-stonking' target, using the default.
+ubuntu-server-live-riscv64: https://launchpad.net/~ubuntu-cdimage/+livefs/ubuntu/stonking/ubuntu-server-live/+build/996796
+ubuntu-server-live-arm64 on Launchpad finished at 2026-07-24 08:32:59 (Failed to build)
+ubuntu-server-live-amd64 on Launchpad finished at 2026-07-24 08:54:04 (Successfully built)
+ubuntu-server-live-arm64-largemem on Launchpad finished at 2026-07-24 13:45:09 (Successfully built)
+`
+
+// desktopLogInProgress is a log where the build has started but not finished.
+const desktopLogInProgress = `===== Building live filesystems =====
+ubuntu-amd64 on Launchpad starting at 2026-07-24 04:24:17
+ubuntu-amd64: https://launchpad.net/~ubuntu-cdimage/+livefs/ubuntu/stonking/ubuntu/+build/996625
+ubuntu-arm64 on Launchpad starting at 2026-07-24 04:24:19
+ubuntu-arm64: https://launchpad.net/~ubuntu-cdimage/+livefs/ubuntu/stonking/ubuntu/+build/996626
+`
+
+// logWithChromeProblem contains a "finished" line whose suffix is neither "Successfully built"
+// nor "Failed to build" — any non-success suffix should be treated as FAILED.
+const logWithChromeProblem = `ubuntu-amd64 on Launchpad starting at 2026-07-24 04:24:17
+ubuntu-amd64 on Launchpad finished at 2026-07-24 04:41:42 (Chroot problem)
+`
+
+// preinstalledLog contains raspi/largemem variant arch labels.
+const preinstalledLog = `ubuntu-desktop-preinstalled-arm64-raspi on Launchpad starting at 2026-07-24 04:24:23
+ubuntu-desktop-preinstalled-arm64-raspi on Launchpad finished at 2026-07-24 04:34:35 (Failed to build)
+`
+
+func TestParseBuildStatusFromLog(t *testing.T) {
+	cases := []struct {
+		desc    string
+		content string
+		arch    string
+		want    BuildStatusState
+	}{
+		// Empty content → not started.
+		{"empty content", "", "amd64", BuildStatusNotStarted},
+		// Empty arch → not started.
+		{"empty arch", typicalServerLog, "", BuildStatusNotStarted},
+		// amd64 successfully built.
+		{"amd64 successfully built", typicalServerLog, "amd64", BuildStatusBuilt},
+		// arm64 failed.
+		{"arm64 failed", typicalServerLog, "arm64", BuildStatusFailed},
+		// arm64-largemem successfully built.
+		{"arm64-largemem built", typicalServerLog, "arm64-largemem", BuildStatusBuilt},
+		// riscv64 started but not finished → in progress.
+		{"riscv64 in progress", typicalServerLog, "riscv64", BuildStatusInProgress},
+		// Desktop build in progress (started, no finished line yet).
+		{"desktop amd64 in progress", desktopLogInProgress, "amd64", BuildStatusInProgress},
+		{"desktop arm64 in progress", desktopLogInProgress, "arm64", BuildStatusInProgress},
+		// Arch not present in log → not started.
+		{"s390x not in log", typicalServerLog, "s390x", BuildStatusNotStarted},
+		// Chroot problem suffix → FAILED.
+		{"amd64 chroot problem", logWithChromeProblem, "amd64", BuildStatusFailed},
+		// Raspi variant arch matching via substring.
+		{"arm64-raspi failed", preinstalledLog, "arm64-raspi", BuildStatusFailed},
+		// Arch with "+" normalised to "-" by caller (ArtefactArch already normalises).
+		{"arm64+largemem normalised", typicalServerLog, "arm64+largemem", BuildStatusBuilt},
+	}
+
+	for _, tc := range cases {
+		got := ParseBuildStatusFromLog(tc.content, tc.arch)
+		if got != tc.want {
+			t.Errorf("ParseBuildStatusFromLog(%q, %q) = %q, want %q",
+				tc.desc, tc.arch, got, tc.want)
+		}
+	}
+}
+
+// --- BuildLogIcon ---
+
+func TestBuildLogIcon(t *testing.T) {
+	cases := []struct {
+		state BuildStatusState
+		want  string
+	}{
+		{BuildStatusBuilt, "✅"},
+		{BuildStatusNotStarted, "⏳"},
+		{BuildStatusInProgress, "🔄"},
+		{BuildStatusFailed, "❌"},
+		{BuildStatusUnknown, "❓"},
+		{"", "❓"},
+	}
+	for _, tc := range cases {
+		got := BuildLogIcon(tc.state)
+		if got != tc.want {
+			t.Errorf("BuildLogIcon(%q) = %q, want %q", tc.state, got, tc.want)
+		}
+	}
+}

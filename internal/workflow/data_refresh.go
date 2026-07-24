@@ -40,15 +40,27 @@ func DataRefreshWorkflow(ctx sdk.Context) error {
 		return err
 	}
 
+	// 2.5. Enrich artefacts with build log status from today's cd-build-log.
+	//      Non-fatal: if log fetching fails, BuildLog fields remain empty and
+	//      formatters fall back to the version-date binary status.
+	logCtx := sdk.WithActivityOptions(ctx, sdk.ActivityOptions{
+		StartToCloseTimeout: 5 * time.Minute,
+	})
+	var logEnriched []domain.Artefact
+	if err := sdk.ExecuteActivity(logCtx, act.EnrichBuildStatus, fresh).Get(logCtx, &logEnriched); err != nil {
+		sdk.GetLogger(ctx).Warn("EnrichBuildStatus failed, build log status will be unavailable", "error", err)
+		logEnriched = fresh
+	}
+
 	// 3. Enrich each artefact with its test execution data. Non-fatal: fall back
 	//    to unenriched artefacts so build status is still available.
 	testCtx := sdk.WithActivityOptions(ctx, sdk.ActivityOptions{
 		StartToCloseTimeout: 5 * time.Minute,
 	})
 	var enriched []domain.Artefact
-	if err := sdk.ExecuteActivity(testCtx, act.FetchTestExecutions, fresh).Get(testCtx, &enriched); err != nil {
+	if err := sdk.ExecuteActivity(testCtx, act.FetchTestExecutions, logEnriched).Get(testCtx, &enriched); err != nil {
 		sdk.GetLogger(ctx).Warn("FetchTestExecutions failed, test data will be stale", "error", err)
-		enriched = fresh
+		enriched = logEnriched
 	}
 
 	// 4. Persist the enriched snapshot atomically.

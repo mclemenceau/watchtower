@@ -11,15 +11,20 @@ import (
 
 // FormatBuildsStatusSummary renders a summary table: one row per release with
 // built/total counts and a 10-square progress bar (🟩 per 10% built, 🟥 for the rest).
-// Returns a "no snapshot" message when artefacts is empty.
+// The counts reflect the enriched BuildLog status when available, falling back to
+// the version-date check. Returns a "no snapshot" message when artefacts is empty.
 func FormatBuildsStatusSummary(artefacts []domain.Artefact) string {
 	if len(artefacts) == 0 {
 		return "No snapshot available yet — the first fetch is still in progress."
 	}
 
 	type releaseStat struct {
-		total int
-		built int
+		total      int
+		built      int
+		inProgress int
+		failed     int
+		notStarted int
+		unknown    int
 	}
 	stats := make(map[string]*releaseStat)
 	for _, art := range artefacts {
@@ -29,8 +34,17 @@ func FormatBuildsStatusSummary(artefacts []domain.Artefact) string {
 			stats[art.Release] = s
 		}
 		s.total++
-		if domain.IsBuiltToday(art.Version) {
+		switch effectiveBuildLog(art) {
+		case domain.BuildStatusBuilt:
 			s.built++
+		case domain.BuildStatusInProgress:
+			s.inProgress++
+		case domain.BuildStatusFailed:
+			s.failed++
+		case domain.BuildStatusNotStarted:
+			s.notStarted++
+		default:
+			s.unknown++
 		}
 	}
 
@@ -42,8 +56,8 @@ func FormatBuildsStatusSummary(artefacts []domain.Artefact) string {
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "**Build Status** · %s\n\n", time.Now().UTC().Format("2006-01-02 15:04 UTC"))
-	sb.WriteString("| Release | Built | Total | Progress |\n")
-	sb.WriteString("|---------|-------|-------|----------|\n")
+	sb.WriteString("| Release | ✅ Built | 🔄 In Progress | ❌ Failed | ⏳ Not Started | ❓ Unknown | Total | Progress |\n")
+	sb.WriteString("|---------|---------|--------------|---------|-------------|---------|-------|----------|\n")
 	for _, r := range releases {
 		s := stats[r]
 		pct := 0
@@ -53,7 +67,8 @@ func FormatBuildsStatusSummary(artefacts []domain.Artefact) string {
 		green := pct / 10
 		red := 10 - green
 		bar := strings.Repeat("🟩", green) + strings.Repeat("🟥", red)
-		fmt.Fprintf(&sb, "| **%s** | %d | %d | %s |\n", r, s.built, s.total, bar)
+		fmt.Fprintf(&sb, "| **%s** | %d | %d | %d | %d | %d | %d | %s |\n",
+			r, s.built, s.inProgress, s.failed, s.notStarted, s.unknown, s.total, bar)
 	}
 	return sb.String()
 }
@@ -104,7 +119,7 @@ func FormatBuildsStatusRelease(artefacts []domain.Artefact, release, product str
 	sb.WriteString("|----|----------|---------|---------|-----|-------|-----|\n")
 	for _, art := range filtered {
 		fmt.Fprintf(&sb, "| %d | %s | %s | %s | %s | %s | %s |\n",
-			art.ID, art.Name, art.OS, art.Version, domain.ImageAge(art.Version), domain.BuildStatus(art.Version), domain.LogCell(art.ImageURL))
+			art.ID, art.Name, art.OS, art.Version, domain.ImageAge(art.Version), artefactStatusCell(art), domain.LogCell(art.ImageURL))
 	}
 	return sb.String()
 }
@@ -334,7 +349,7 @@ func FormatScheduledSummary(artefacts []domain.Artefact, releasesScope []string)
 		productOrder := []string{}
 
 		for _, art := range arts {
-			if domain.IsBuiltToday(art.Version) {
+			if effectiveBuildLog(art) == domain.BuildStatusBuilt {
 				built++
 				continue
 			}
@@ -382,6 +397,26 @@ func archFromName(name string) string {
 	}
 	return "unknown"
 }
+
+// effectiveBuildLog returns the effective BuildStatusState for an artefact.
+// When a BuildLog state has been set (via EnrichBuildStatus), it is returned directly.
+// Otherwise the function falls back to version-date logic: today's version = BUILT,
+// any other date = NOT_STARTED (conservative fallback; no log data available).
+func effectiveBuildLog(art domain.Artefact) domain.BuildStatusState {
+	if art.BuildLog != "" {
+		return art.BuildLog
+	}
+	if domain.IsBuiltToday(art.Version) {
+		return domain.BuildStatusBuilt
+	}
+	return domain.BuildStatusNotStarted
+}
+
+// artefactStatusCell returns the display cell (emoji) for an artefact's build status,
+// using the enriched BuildLog state when available or falling back to version-based logic.
+func artefactStatusCell(art domain.Artefact) string {
+	return domain.BuildLogIcon(effectiveBuildLog(art))
+}
 func FormatChangeReport(r domain.ChangeReport) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "**Change Report** · %s\n\n", time.Now().UTC().Format("2006-01-02 15:04 UTC"))
@@ -422,7 +457,7 @@ func FormatChangeReport(r domain.ChangeReport) string {
 		sb.WriteString("|---------|---------|----------|---------|-----|-------|-----|\n")
 		for _, n := range r.NewArtefacts {
 			fmt.Fprintf(&sb, "| %s | %s | %s | %s | %s | %s | %s |\n",
-				n.Release, n.OS, n.Name, n.Version, domain.ImageAge(n.Version), domain.BuildStatus(n.Version), domain.LogCell(n.ImageURL))
+				n.Release, n.OS, n.Name, n.Version, domain.ImageAge(n.Version), artefactStatusCell(n), domain.LogCell(n.ImageURL))
 		}
 	}
 
