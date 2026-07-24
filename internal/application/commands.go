@@ -169,12 +169,20 @@ func Dispatch(
 			// Send an immediate acknowledgement so the user knows the bot is working.
 			// Free-text intent resolution involves an LLM call that can take several seconds.
 			_ = notifier.Send("_thinking…_")
-			res := resolver.Resolve(ctx, sessionID, msg)
+			// Build a filtered state snapshot to give the LLM relevant context.
+			// State is re-serialised on every call so answers always reflect the
+			// latest snapshot (important for multi-turn conversations).
+			contextJSON := BuildContext(msg, artefacts, failures)
+			res := resolver.Resolve(ctx, sessionID, msg, contextJSON)
 			switch res.Kind {
 			case intent.Dispatched:
 				// Re-dispatch with the resolved command; no further intent resolution.
-				// logFetcher/llm/launchpad are nil — investigate cannot be invoked via intent resolver.
-				return Dispatch(ctx, sessionID, res.Command, artefacts, failures, releasesScope, summaryForProducts, notifier, "", nil, nil, nil, nil, triggerAnalysis)
+				// Pass logFetcher/llm/launchpad so that `investigate` is reachable via
+				// free-form (e.g. "what's wrong with artefact 1234?").
+				return Dispatch(ctx, sessionID, res.Command, artefacts, failures, releasesScope, summaryForProducts, notifier, "", nil, logFetcher, llm, launchpad, triggerAnalysis)
+			case intent.Answered:
+				// LLM answered directly using the state data — send the prose reply.
+				return notifier.Send(res.Reply)
 			case intent.NeedsInfo:
 				return notifier.Send(res.Reply)
 			case intent.Failed:
