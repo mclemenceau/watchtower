@@ -449,6 +449,86 @@ const preinstalledLog = `ubuntu-desktop-preinstalled-arm64-raspi on Launchpad st
 ubuntu-desktop-preinstalled-arm64-raspi on Launchpad finished at 2026-07-24 04:34:35 (Failed to build)
 `
 
+// preinstalledServerLog reflects the real daily-preinstalled log format where labels
+// use "{product}-{arch}-{variant}" rather than bare arch tokens.
+// Artefacts like "stonking-preinstalled-server-amd64.img.xz" (arch="amd64") or
+// "noble-preinstalled-server-riscv64.img.xz" (arch="riscv64") must be matched
+// via ResolveLogLabel → label="amd64-generic" / "riscv64-generic".
+const preinstalledServerLog = `===== Building live filesystems =====
+ubuntu-server-arm64-raspi on Launchpad starting at 2026-07-24 02:10:01
+ubuntu-server-riscv64-generic on Launchpad starting at 2026-07-24 02:10:12
+ubuntu-server-amd64-generic on Launchpad starting at 2026-07-24 02:10:15
+ubuntu-server-arm64-generic on Launchpad starting at 2026-07-24 02:10:17
+ubuntu-server-arm64-raspi on Launchpad finished at 2026-07-24 02:31:54 (Failed to build)
+ubuntu-server-arm64-generic on Launchpad finished at 2026-07-24 02:42:19 (Failed to build)
+ubuntu-server-amd64-generic on Launchpad finished at 2026-07-24 04:44:35 (Successfully built)
+ubuntu-server-riscv64-generic on Launchpad finished at 2026-07-24 08:15:54 (Failed to build)
+`
+
+// --- LogPrefixFromImageURL ---
+
+func TestLogPrefixFromImageURL(t *testing.T) {
+	cases := []struct {
+		imageURL string
+		want     string
+	}{
+		{
+			"https://cdimage.ubuntu.com/ubuntu-server/stonking/daily-preinstalled/20260627/stonking-preinstalled-server-arm64.img.xz",
+			"daily-preinstalled",
+		},
+		{
+			"https://cdimage.ubuntu.com/ubuntu-server/stonking/daily-live/20260724/stonking-live-server-amd64.iso",
+			"daily-live",
+		},
+		{
+			"https://cdimage.ubuntu.com/ubuntu/noble/daily-preinstalled/20260724/noble-preinstalled-desktop-arm64+raspi.img.xz",
+			"daily-preinstalled",
+		},
+		// Invalid / empty inputs
+		{"", ""},
+		{"https://example.com/ubuntu-server/stonking/daily-live/20260724/file.iso", ""},
+	}
+	for _, tc := range cases {
+		got := LogPrefixFromImageURL(tc.imageURL)
+		if got != tc.want {
+			t.Errorf("LogPrefixFromImageURL(%q) = %q, want %q", tc.imageURL, got, tc.want)
+		}
+	}
+}
+
+// --- ResolveLogLabel ---
+
+func TestResolveLogLabel(t *testing.T) {
+	cases := []struct {
+		logPrefix string
+		arch      string
+		want      string
+	}{
+		// Preinstalled mappings — arch maps to canonical "{arch}-generic" label.
+		{"daily-preinstalled", "amd64", "amd64-generic"},
+		{"daily-preinstalled", "arm64", "arm64-generic"},
+		{"daily-preinstalled", "riscv64", "riscv64-generic"},
+		// daily-live: no mapping — label equals arch unchanged.
+		{"daily-live", "amd64", "amd64"},
+		{"daily-live", "arm64", "arm64"},
+		{"daily-live", "riscv64", "riscv64"},
+		// Variant arches (already-qualified): no mapping — label returned as-is.
+		{"daily-preinstalled", "arm64-raspi", "arm64-raspi"},
+		{"daily-preinstalled", "arm64-largemem", "arm64-largemem"},
+		// Unknown log prefix: passthrough.
+		{"daily", "amd64", "amd64"},
+		// Empty inputs.
+		{"", "amd64", "amd64"},
+		{"daily-preinstalled", "", ""},
+	}
+	for _, tc := range cases {
+		got := ResolveLogLabel(tc.logPrefix, tc.arch)
+		if got != tc.want {
+			t.Errorf("ResolveLogLabel(%q, %q) = %q, want %q", tc.logPrefix, tc.arch, got, tc.want)
+		}
+	}
+}
+
 func TestParseBuildStatusFromLog(t *testing.T) {
 	cases := []struct {
 		desc    string
@@ -475,10 +555,21 @@ func TestParseBuildStatusFromLog(t *testing.T) {
 		{"s390x not in log", typicalServerLog, "s390x", BuildStatusNotStarted},
 		// Chroot problem suffix → FAILED.
 		{"amd64 chroot problem", logWithChromeProblem, "amd64", BuildStatusFailed},
-		// Raspi variant arch matching via substring.
+		// arm64+raspi: arm64-raspi matches "ubuntu-server-arm64-raspi" via suffix — FAILED.
 		{"arm64-raspi failed", preinstalledLog, "arm64-raspi", BuildStatusFailed},
 		// Arch with "+" normalised to "-" by caller (ArtefactArch already normalises).
 		{"arm64+largemem normalised", typicalServerLog, "arm64+largemem", BuildStatusBuilt},
+		// Preinstalled server: raw arch "amd64" does NOT match "ubuntu-server-amd64-generic".
+		// After ResolveLogLabel the caller must pass "amd64-generic" instead.
+		{"preinstalled amd64 raw arch no match", preinstalledServerLog, "amd64", BuildStatusNotStarted},
+		// With the resolved label "amd64-generic" the match succeeds → BUILT.
+		{"preinstalled amd64-generic built", preinstalledServerLog, "amd64-generic", BuildStatusBuilt},
+		// arm64 raw arch does not match "ubuntu-server-arm64-generic" or "ubuntu-server-arm64-raspi".
+		{"preinstalled arm64 raw arch no match", preinstalledServerLog, "arm64", BuildStatusNotStarted},
+		// With resolved label "arm64-generic" → FAILED (arm64-generic finished Failed to build).
+		{"preinstalled arm64-generic failed", preinstalledServerLog, "arm64-generic", BuildStatusFailed},
+		// riscv64-generic → FAILED.
+		{"preinstalled riscv64-generic failed", preinstalledServerLog, "riscv64-generic", BuildStatusFailed},
 	}
 
 	for _, tc := range cases {

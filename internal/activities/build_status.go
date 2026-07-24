@@ -111,7 +111,13 @@ func (a *Activities) EnrichBuildStatus(ctx context.Context, artefacts []domain.A
 		}
 
 		arch := domain.ArtefactArch(art.Name)
-		enriched[i].BuildLog = domain.ParseBuildStatusFromLog(content, arch)
+		// Resolve the canonical log label for this (logPrefix, arch) pair.
+		// For most artefacts logPrefix is e.g. "daily-live" and the label equals
+		// the arch. For preinstalled builds the log uses "{arch}-{variant}" labels;
+		// ResolveLogLabel returns the appropriate canonical variant (e.g. "amd64-generic").
+		logPrefix := domain.LogPrefixFromImageURL(art.ImageURL)
+		label := domain.ResolveLogLabel(logPrefix, arch)
+		enriched[i].BuildLog = domain.ParseBuildStatusFromLog(content, label)
 	}
 
 	return enriched, nil

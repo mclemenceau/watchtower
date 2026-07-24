@@ -546,6 +546,66 @@ func ArtefactArch(name string) string {
 	return ""
 }
 
+// LogPrefixFromImageURL extracts the log-prefix path segment (third component
+// after the host in a cdimage.ubuntu.com URL, e.g. "daily-preinstalled",
+// "daily-live"). Returns "" when the URL cannot be parsed.
+func LogPrefixFromImageURL(imageURL string) string {
+	_, _, logPrefix, ok := parseImageURLParts(imageURL)
+	if !ok {
+		return ""
+	}
+	return logPrefix
+}
+
+// preinstalledLabelMap maps a (logPrefix, baseArch) pair to the canonical label
+// suffix used in the corresponding cd-build-log "on Launchpad" lines.
+//
+// Background: the daily-preinstalled logs use labels of the form
+// "{product}-{arch}-{variant}" (e.g. "ubuntu-server-amd64-generic") rather than
+// "{product}-{arch}" as used by daily-live logs. Because each preinstalled artefact
+// that does NOT encode a hardware variant in its filename (e.g.
+// "stonking-preinstalled-server-amd64.img.xz") only carries the base arch, the
+// standard suffix-match in labelMatchesArch fails to match any log label.
+//
+// The mapping is intentionally explicit (Option C) rather than using a generic
+// infix rule, because:
+//   - The naming convention in cd-build-logs is not uniform across log prefixes.
+//   - For arches with multiple variants (e.g. riscv64 on noble has 7 hardware
+//     variants), an infix rule would match all of them and produce ambiguous
+//     multi-label semantics (some succeed, some fail).
+//   - The canonical variant ("generic") represents the reference platform for
+//     each arch; its outcome is the most meaningful single signal for the artefact.
+//
+// This mapping is expected to be temporary; a future Test Observer replacement
+// will expose build status directly through the API, making log parsing obsolete.
+//
+// Key format: "logPrefix/baseArch" (e.g. "daily-preinstalled/amd64").
+// Value: canonical label suffix (e.g. "amd64-generic").
+var preinstalledLabelMap = map[string]string{
+	"daily-preinstalled/amd64":   "amd64-generic",
+	"daily-preinstalled/arm64":   "arm64-generic",
+	"daily-preinstalled/riscv64": "riscv64-generic",
+}
+
+// ResolveLogLabel returns the canonical label suffix to use when scanning a
+// cd-build-log for the given logPrefix and arch combination.
+//
+// For most artefacts the arch itself is the correct label suffix (e.g. "amd64"
+// in "ubuntu-server-live-amd64 on Launchpad starting at ..."). For preinstalled
+// builds the log uses "{arch}-{variant}" labels; this function returns the
+// canonical variant label from preinstalledLabelMap, or arch unchanged when no
+// mapping entry exists.
+//
+// logPrefix is the third path segment of the cdimage URL
+// (e.g. "daily-preinstalled", "daily-live").
+func ResolveLogLabel(logPrefix, arch string) string {
+	key := logPrefix + "/" + arch
+	if canonical, ok := preinstalledLabelMap[key]; ok {
+		return canonical
+	}
+	return arch
+}
+
 // ParseBuildStatusFromLog determines the build status for a specific architecture
 // by scanning the content of a cd-build-log.
 //
