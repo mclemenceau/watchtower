@@ -138,8 +138,7 @@ func main() {
 		Failures:           failureState,
 		Hook:               notifier,
 		LogFetcher:         logFetcher,
-		DefaultRelease:     cfg.DefaultRelease,
-		SummaryForReleases: cfg.SummaryForReleases,
+		ReleasesScope:      cfg.ReleasesScope,
 		SummaryForProducts: cfg.SummaryForProducts,
 		LLM:                llmClient,
 		MaxAnalysisPerRun:  cfg.MaxFailuresPerAnalysisRun,
@@ -203,9 +202,8 @@ func main() {
 		},
 		snap,
 		failureState,
-		cfg.DefaultRelease,
+		cfg.ReleasesScope,
 		cfg.SummaryForProducts,
-		cfg.SummaryForReleases,
 		nil, // httpClient — bot.go uses its own default
 		resolver,
 		logFetcher,
@@ -218,7 +216,7 @@ func main() {
 	mattermostadapter.RunREPL(
 		context.Background(), os.Stdin, notifier,
 		snap, failureState,
-		cfg.DefaultRelease, cfg.SummaryForProducts, cfg.SummaryForReleases,
+		cfg.ReleasesScope, cfg.SummaryForProducts,
 		cfg.WatchtowerKeyword, resolver, logFetcher, llmClient, launchpadSrc,
 		triggerAnalysis,
 	)

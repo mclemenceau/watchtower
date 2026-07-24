@@ -66,7 +66,7 @@ Go interfaces defining what the application needs from the outside world:
 Protocol-agnostic command routing and response formatting. Imports only `domain`
 and `ports` — **never any adapter package**.
 
-- `commands.go` — `Dispatch(ctx, sessionID, msg, artefacts, defaultRelease, notifier, keyword, resolver, logFetcher, llm)`: routes messages to handlers
+- `commands.go` — `Dispatch(ctx, sessionID, msg, artefacts, releasesScope, summaryForProducts, notifier, keyword, resolver, logFetcher, llm)`: routes messages to handlers
 - `formatters.go` — pure `string`-returning functions: `FormatBuildsStatusSummary`, `FormatBuildsStatusRelease`, `FormatTestsStatusSummary`, `FormatTestsStatusRelease`, `FormatChangeReport`, `FormatInvestigation`, `HelpText`
 - `loganalysis.go` — `analyzeLog` helper: fetches log via `LogFetcher`, calls LLM, returns `domain.LogAnalysis`
 

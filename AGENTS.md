@@ -5,10 +5,11 @@ and a reactive Mattermost bot. See [DESIGN.md](DESIGN.md) for architecture, data
 and demo flows.
 
 ## Environment variables
-MATTERMOST_WEBHOOK_URL # Mattermost incoming webhook URL — optional; unset = stdout simulation
-TEST_OBSERVER_URL      # Ubuntu Test Observer API base URL (default: https://tests-api.ubuntu.com)
-TEMPORAL_HOST          # Temporal server (default: localhost:7233)
-DEFAULT_RELEASE        # Pin status table to a release; empty = auto-detect
+MATTERMOST_WEBHOOK_URL        # Mattermost incoming webhook URL — optional; unset = stdout simulation
+TEST_OBSERVER_URL             # Ubuntu Test Observer API base URL (default: https://tests-api.ubuntu.com)
+TEMPORAL_HOST                 # Temporal server (default: localhost:7233)
+WATCHTOWER_RELEASES_SCOPE     # Comma-separated ordered list of releases to scope ALL operations
+                              # (fetch, diff, summary, failures, tests); empty = all releases
 
 # TODO: re-add when log analysis is implemented
 # OPENROUTER_API_KEY   # OpenRouter API key

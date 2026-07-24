@@ -10,8 +10,7 @@ import (
 )
 
 type Config struct {
-	DefaultRelease     string
-	SummaryForReleases []string // ordered list of releases to include in the scheduled summary; empty = all
+	ReleasesScope      []string // ordered scope of releases for all operations; nil = all
 	SummaryForProducts []string // restrict summaries to these OS/product names; empty = all
 	TestObserverURL    string
 	TemporalHost       string
@@ -52,8 +51,7 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	return &Config{
-		DefaultRelease:              os.Getenv("DEFAULT_RELEASE"),
-		SummaryForReleases:          parseSummaryList(os.Getenv("SUMMARY_FOR_RELEASES")),
+		ReleasesScope:               parseSummaryList(os.Getenv("WATCHTOWER_RELEASES_SCOPE")),
 		SummaryForProducts:          parseSummaryList(os.Getenv("SUMMARY_FOR_PRODUCTS")),
 		TestObserverURL:             envOrDefault("TEST_OBSERVER_URL", "https://tests-api.ubuntu.com"),
 		TemporalHost:                envOrDefault("TEMPORAL_HOST", "localhost:7233"),

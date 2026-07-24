@@ -40,20 +40,19 @@ import (
 // `analyse failures [release]`. It should start a background FailureAnalysisWorkflow.
 // Pass nil to disable on-demand analysis triggering.
 //
-// allowedProducts is an optional allow-list of product/OS names (case-insensitive).
+// summaryForProducts is an optional allow-list of product/OS names (case-insensitive).
 // When non-empty, artefacts whose OS is not in the list are excluded from all
 // summary and detail views. Pass nil to include all products.
 //
-// summaryForReleases is the ordered release list used by the `summary` command
-// (mirrors the SUMMARY_FOR_RELEASES env var). Pass nil to include all releases.
+// releasesScope is the ordered release scope used by the `summary` command and fetch
+// filtering (mirrors the WATCHTOWER_RELEASES_SCOPE env var). Pass nil to include all releases.
 func Dispatch(
 	ctx context.Context,
 	sessionID, msg string,
 	artefacts []domain.Artefact,
 	failures domain.FailureStore,
-	defaultRelease string,
+	releasesScope []string,
 	summaryForProducts []string,
-	summaryForReleases []string,
 	notifier ports.Notifier,
 	keyword string,
 	resolver *intent.Resolver,
@@ -74,6 +73,20 @@ func Dispatch(
 		var filtered []domain.Artefact
 		for _, art := range artefacts {
 			if summaryProductAllowed(summaryForProducts, art.OS) {
+				filtered = append(filtered, art)
+			}
+		}
+		artefacts = filtered
+	}
+
+	// Apply the env-level releases scope: filter out artefacts whose Release is
+	// not in the configured scope. This ensures all commands (builds status,
+	// tests status, failures, summary, investigate) only operate on the scoped
+	// releases, even when the snapshot on disk contains more releases.
+	if len(releasesScope) > 0 {
+		var filtered []domain.Artefact
+		for _, art := range artefacts {
+			if releaseAllowed(releasesScope, art.Release) {
 				filtered = append(filtered, art)
 			}
 		}
@@ -104,7 +117,7 @@ func Dispatch(
 		return notifier.Send(HelpText())
 
 	case lower == "summary":
-		return notifier.Send(FormatScheduledSummary(artefacts, summaryForReleases))
+		return notifier.Send(FormatScheduledSummary(artefacts, releasesScope))
 
 	case lower == "builds status":
 		return notifier.Send(FormatBuildsStatusSummary(artefacts))
@@ -161,7 +174,7 @@ func Dispatch(
 			case intent.Dispatched:
 				// Re-dispatch with the resolved command; no further intent resolution.
 				// logFetcher/llm/launchpad are nil — investigate cannot be invoked via intent resolver.
-				return Dispatch(ctx, sessionID, res.Command, artefacts, failures, defaultRelease, summaryForProducts, summaryForReleases, notifier, "", nil, nil, nil, nil, triggerAnalysis)
+				return Dispatch(ctx, sessionID, res.Command, artefacts, failures, releasesScope, summaryForProducts, notifier, "", nil, nil, nil, nil, triggerAnalysis)
 			case intent.NeedsInfo:
 				return notifier.Send(res.Reply)
 			case intent.Failed:
@@ -222,6 +235,16 @@ func investigateArtefact(
 func summaryProductAllowed(list []string, product string) bool {
 	for _, p := range list {
 		if strings.EqualFold(p, product) {
+			return true
+		}
+	}
+	return false
+}
+
+// releaseAllowed reports whether release (case-insensitive) is in the scope list.
+func releaseAllowed(scope []string, release string) bool {
+	for _, r := range scope {
+		if strings.EqualFold(r, release) {
 			return true
 		}
 	}

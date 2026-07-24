@@ -106,7 +106,7 @@ var testArtefactsWithBuilds = func() []domain.Artefact {
 
 func TestDispatchHelp(t *testing.T) {
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "help", testArtefacts, nil, "", nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "help", testArtefacts, nil, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	for _, want := range []string{"builds status", "builds status <release>", "tests status", "help"} {
@@ -118,7 +118,7 @@ func TestDispatchHelp(t *testing.T) {
 
 func TestDispatchHelpCaseInsensitive(t *testing.T) {
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "HELP", testArtefacts, nil, "", nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "HELP", testArtefacts, nil, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "builds status") {
@@ -130,8 +130,8 @@ func TestDispatchHelpCaseInsensitive(t *testing.T) {
 
 func TestDispatchSummary(t *testing.T) {
 	hook := &captureNotifier{}
-	// summaryForReleases = ["noble"] so only noble appears.
-	if err := Dispatch(context.Background(), "test", "summary", testArtefacts, nil, "", nil, []string{"noble"}, hook, "", nil, nil, nil, nil, nil); err != nil {
+	// releasesScope = ["noble"] so only noble appears.
+	if err := Dispatch(context.Background(), "test", "summary", testArtefacts, nil, []string{"noble"}, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "Build Summary") {
@@ -140,16 +140,16 @@ func TestDispatchSummary(t *testing.T) {
 	if !strings.Contains(hook.last, "noble") {
 		t.Errorf("expected 'noble' in summary output, got:\n%s", hook.last)
 	}
-	// plucky is in testArtefacts but not in summaryForReleases
+	// plucky is in testArtefacts but not in releasesScope
 	if strings.Contains(hook.last, "plucky") {
-		t.Errorf("'plucky' should not appear when not in summaryForReleases, got:\n%s", hook.last)
+		t.Errorf("'plucky' should not appear when not in releasesScope, got:\n%s", hook.last)
 	}
 }
 
 func TestDispatchSummaryNilReleases(t *testing.T) {
 	hook := &captureNotifier{}
 	// nil summaryForReleases → all releases
-	if err := Dispatch(context.Background(), "test", "summary", testArtefacts, nil, "", nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "summary", testArtefacts, nil, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "noble") {
@@ -162,7 +162,7 @@ func TestDispatchSummaryNilReleases(t *testing.T) {
 
 func TestDispatchSummaryEmptySnapshot(t *testing.T) {
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "summary", nil, nil, "", nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "summary", nil, nil, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "No snapshot") {
@@ -174,7 +174,7 @@ func TestDispatchSummaryEmptySnapshot(t *testing.T) {
 
 func TestDispatchBuildsStatus(t *testing.T) {
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "builds status", testArtefacts, nil, "", nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "builds status", testArtefacts, nil, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "noble") {
@@ -191,9 +191,24 @@ func TestDispatchBuildsStatus(t *testing.T) {
 	}
 }
 
+func TestDispatchBuildsStatusReleasesScope(t *testing.T) {
+	// releasesScope = ["noble"] — builds status must only show noble even though
+	// the snapshot contains both noble and plucky.
+	hook := &captureNotifier{}
+	if err := Dispatch(context.Background(), "test", "builds status", testArtefacts, nil, []string{"noble"}, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(hook.last, "noble") {
+		t.Errorf("builds status with scope missing 'noble', got:\n%s", hook.last)
+	}
+	if strings.Contains(hook.last, "plucky") {
+		t.Errorf("'plucky' should not appear when not in releasesScope, got:\n%s", hook.last)
+	}
+}
+
 func TestDispatchBuildsStatusCaseInsensitive(t *testing.T) {
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "Builds Status", testArtefacts, nil, "", nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "Builds Status", testArtefacts, nil, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "noble") {
@@ -203,7 +218,7 @@ func TestDispatchBuildsStatusCaseInsensitive(t *testing.T) {
 
 func TestDispatchBuildsStatusEmptySnapshot(t *testing.T) {
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "builds status", nil, nil, "", nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "builds status", nil, nil, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "No snapshot") {
@@ -215,7 +230,7 @@ func TestDispatchBuildsStatusEmptySnapshot(t *testing.T) {
 
 func TestDispatchBuildsStatusRelease(t *testing.T) {
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "builds status noble", testArtefacts, nil, "", nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "builds status noble", testArtefacts, nil, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "noble") {
@@ -240,7 +255,7 @@ func TestDispatchBuildsStatusRelease(t *testing.T) {
 
 func TestDispatchBuildsStatusReleaseCaseInsensitive(t *testing.T) {
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "builds status Noble", testArtefacts, nil, "", nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "builds status Noble", testArtefacts, nil, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "ubuntu-desktop-amd64") {
@@ -250,7 +265,7 @@ func TestDispatchBuildsStatusReleaseCaseInsensitive(t *testing.T) {
 
 func TestDispatchBuildsStatusReleaseUnknown(t *testing.T) {
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "builds status nonexistent", testArtefacts, nil, "", nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "builds status nonexistent", testArtefacts, nil, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "No artefacts found") {
@@ -270,7 +285,7 @@ func TestDispatchBuildsStatusReleaseLogLink(t *testing.T) {
 		{ID: 2, Name: "ubuntu-desktop-amd64", OS: "ubuntu", Release: "noble", Version: "20200101"},
 	}
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "builds status noble", artefacts, nil, "", nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "builds status noble", artefacts, nil, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	// Artefact with imageURL should have a 🔗 log link in the Log column
@@ -295,7 +310,7 @@ func TestDispatchBuildsStatusReleaseLogLink(t *testing.T) {
 
 func TestDispatchBuildsStatusReleaseProduct(t *testing.T) {
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "builds status noble ubuntu-server", testArtefacts, nil, "", nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "builds status noble ubuntu-server", testArtefacts, nil, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "ubuntu-server-amd64") {
@@ -311,7 +326,7 @@ func TestDispatchBuildsStatusReleaseProduct(t *testing.T) {
 
 func TestDispatchBuildsStatusReleaseProductCaseInsensitive(t *testing.T) {
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "builds status Noble Ubuntu-Server", testArtefacts, nil, "", nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "builds status Noble Ubuntu-Server", testArtefacts, nil, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "ubuntu-server-amd64") {
@@ -324,7 +339,7 @@ func TestDispatchBuildsStatusReleaseProductCaseInsensitive(t *testing.T) {
 
 func TestDispatchBuildsStatusReleaseProductUnknown(t *testing.T) {
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "builds status noble nonexistent-product", testArtefacts, nil, "", nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "builds status noble nonexistent-product", testArtefacts, nil, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "No artefacts found") {
@@ -339,7 +354,7 @@ func TestDispatchBuildsStatusReleaseProductUnknown(t *testing.T) {
 
 func TestDispatchBuildsNoArgs(t *testing.T) {
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "builds", testArtefacts, nil, "", nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "builds", testArtefacts, nil, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "Usage") {
@@ -349,7 +364,7 @@ func TestDispatchBuildsNoArgs(t *testing.T) {
 
 func TestDispatchBuildsUnknownSubcommand(t *testing.T) {
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "builds noble", testArtefacts, nil, "", nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "builds noble", testArtefacts, nil, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "Usage") {
@@ -361,7 +376,7 @@ func TestDispatchBuildsUnknownSubcommand(t *testing.T) {
 
 func TestDispatchUnknown(t *testing.T) {
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "banana", testArtefacts, nil, "", nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "banana", testArtefacts, nil, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "didn't quite get") {
@@ -374,7 +389,7 @@ func TestDispatchUnknown(t *testing.T) {
 
 func TestDispatchEmpty(t *testing.T) {
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "   ", testArtefacts, nil, "", nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "   ", testArtefacts, nil, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if hook.last != "" {
@@ -388,7 +403,7 @@ func TestDispatchBuildsStatusReleaseSortedByProduct(t *testing.T) {
 		{ID: 2, Name: "ubuntu-desktop-amd64", OS: "ubuntu", Release: "noble", Version: today},
 	}
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "builds status noble", artefacts, nil, "", nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "builds status noble", artefacts, nil, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	ubuntuPos := strings.Index(hook.last, "| ubuntu-desktop-amd64 | ubuntu |")
@@ -435,7 +450,7 @@ func TestBuildsStatusProgressBar(t *testing.T) {
 		{ID: 5, Release: "noble", Version: today},
 	}
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "builds status", artefacts, nil, "", nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "builds status", artefacts, nil, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	wantBar := strings.Repeat("🟩", 10)
@@ -453,7 +468,7 @@ func TestBuildsStatusProgressBarZero(t *testing.T) {
 		{ID: 2, Release: "noble", Version: yesterday},
 	}
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "builds status", artefacts, nil, "", nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "builds status", artefacts, nil, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	wantBar := strings.Repeat("🟥", 10)
@@ -469,7 +484,7 @@ func TestBuildsStatusProgressBarZero(t *testing.T) {
 
 func TestDispatchTestsStatusEmptySnapshot(t *testing.T) {
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "tests status", nil, nil, "", nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "tests status", nil, nil, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "No snapshot") {
@@ -479,7 +494,7 @@ func TestDispatchTestsStatusEmptySnapshot(t *testing.T) {
 
 func TestDispatchTestsStatus(t *testing.T) {
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "tests status", testArtefactsWithBuilds, nil, "", nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "tests status", testArtefactsWithBuilds, nil, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "plucky") {
@@ -498,7 +513,7 @@ func TestDispatchTestsStatus(t *testing.T) {
 
 func TestDispatchTestsStatusCaseInsensitive(t *testing.T) {
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "Tests Status", testArtefactsWithBuilds, nil, "", nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "Tests Status", testArtefactsWithBuilds, nil, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "plucky") {
@@ -509,7 +524,7 @@ func TestDispatchTestsStatusCaseInsensitive(t *testing.T) {
 func TestDispatchTestsStatusNoBuildsInSnapshot(t *testing.T) {
 	// Artefacts with no Builds field (e.g. snapshot not yet enriched).
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "tests status", testArtefacts, nil, "", nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "tests status", testArtefacts, nil, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "No test executions found") {
@@ -521,7 +536,7 @@ func TestDispatchTestsStatusNoBuildsInSnapshot(t *testing.T) {
 
 func TestDispatchTestsStatusRelease(t *testing.T) {
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "tests status plucky", testArtefactsWithBuilds, nil, "", nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "tests status plucky", testArtefactsWithBuilds, nil, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "plucky-desktop-amd64.iso") {
@@ -550,7 +565,7 @@ func TestDispatchTestsStatusRelease(t *testing.T) {
 
 func TestDispatchTestsStatusReleaseUnknown(t *testing.T) {
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "tests status nonexistent", testArtefactsWithBuilds, nil, "", nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "tests status nonexistent", testArtefactsWithBuilds, nil, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "No artefacts found") {
@@ -567,7 +582,7 @@ func TestDispatchTestsStatusReleaseNoTests(t *testing.T) {
 			Builds: testArtefactsWithBuilds[3].Builds},
 	}
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "tests status plucky", artefacts, nil, "", nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "tests status plucky", artefacts, nil, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "No test executions found") {
@@ -579,7 +594,7 @@ func TestDispatchTestsStatusReleaseNoTests(t *testing.T) {
 
 func TestDispatchTestsStatusReleaseProduct(t *testing.T) {
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "tests status plucky ubuntu-server", testArtefactsWithBuilds, nil, "", nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "tests status plucky ubuntu-server", testArtefactsWithBuilds, nil, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "plucky-server-amd64.iso") {
@@ -592,7 +607,7 @@ func TestDispatchTestsStatusReleaseProduct(t *testing.T) {
 
 func TestDispatchTestsStatusReleaseProductUnknown(t *testing.T) {
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "tests status plucky nonexistent-product", testArtefactsWithBuilds, nil, "", nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "tests status plucky nonexistent-product", testArtefactsWithBuilds, nil, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "No artefacts found") {
@@ -607,7 +622,7 @@ func TestDispatchTestsStatusReleaseProductUnknown(t *testing.T) {
 
 func TestDispatchTestsNoArgs(t *testing.T) {
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "tests", testArtefacts, nil, "", nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "tests", testArtefacts, nil, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "Usage") {
@@ -617,7 +632,7 @@ func TestDispatchTestsNoArgs(t *testing.T) {
 
 func TestDispatchTestsUnknownSubcommand(t *testing.T) {
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "tests noble", testArtefacts, nil, "", nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "tests noble", testArtefacts, nil, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "Usage") {
@@ -629,7 +644,7 @@ func TestDispatchTestsUnknownSubcommand(t *testing.T) {
 
 func TestDispatchTestsStatusReleaseCILink(t *testing.T) {
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "tests status plucky ubuntu", testArtefactsWithBuilds, nil, "", nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "tests status plucky ubuntu", testArtefactsWithBuilds, nil, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	// The FAILED Jenkins execution for 1001 has a ci_link; status cell must be a hyperlink.
@@ -643,7 +658,7 @@ func TestDispatchTestsStatusReleaseCILink(t *testing.T) {
 func TestDispatchKeywordRequired(t *testing.T) {
 	hook := &captureNotifier{}
 	// With keyword set, a bare "help" (no keyword prefix) must be ignored.
-	if err := Dispatch(context.Background(), "test", "help", testArtefacts, nil, "", nil, nil, hook, "@watchtower", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "help", testArtefacts, nil, nil, nil, hook, "@watchtower", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if hook.last != "" {
@@ -654,7 +669,7 @@ func TestDispatchKeywordRequired(t *testing.T) {
 func TestDispatchKeywordStripped(t *testing.T) {
 	hook := &captureNotifier{}
 	// "@watchtower help" must route to the help handler.
-	if err := Dispatch(context.Background(), "test", "@watchtower help", testArtefacts, nil, "", nil, nil, hook, "@watchtower", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "@watchtower help", testArtefacts, nil, nil, nil, hook, "@watchtower", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "builds status") {
@@ -664,7 +679,7 @@ func TestDispatchKeywordStripped(t *testing.T) {
 
 func TestDispatchKeywordCaseInsensitive(t *testing.T) {
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "@Watchtower builds status", testArtefacts, nil, "", nil, nil, hook, "@watchtower", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "@Watchtower builds status", testArtefacts, nil, nil, nil, hook, "@watchtower", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "noble") {
@@ -675,7 +690,7 @@ func TestDispatchKeywordCaseInsensitive(t *testing.T) {
 func TestDispatchKeywordBareShowsGreeting(t *testing.T) {
 	hook := &captureNotifier{}
 	// Just the keyword alone (no command) should show the friendly greeting.
-	if err := Dispatch(context.Background(), "test", "@watchtower", testArtefacts, nil, "", nil, nil, hook, "@watchtower", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "@watchtower", testArtefacts, nil, nil, nil, hook, "@watchtower", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "Watchtower") {
@@ -689,7 +704,7 @@ func TestDispatchKeywordBareShowsGreeting(t *testing.T) {
 func TestDispatchNoKeyword(t *testing.T) {
 	hook := &captureNotifier{}
 	// Empty keyword → every message is routed without filtering.
-	if err := Dispatch(context.Background(), "test", "help", testArtefacts, nil, "", nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "help", testArtefacts, nil, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "builds status") {
@@ -702,7 +717,7 @@ func TestDispatchKeywordWithBuildsStatus(t *testing.T) {
 	artefacts := []domain.Artefact{
 		{ID: 1, Release: "noble", Version: time.Now().UTC().Format("20060102")},
 	}
-	if err := Dispatch(context.Background(), "test", "@watchtower builds status", artefacts, nil, "", nil, nil, hook, "@watchtower", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "@watchtower builds status", artefacts, nil, nil, nil, hook, "@watchtower", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "noble") {
@@ -754,7 +769,7 @@ func (m *mockFuncLogFetcher) Fetch(ctx context.Context, url string) (string, err
 
 func TestDispatchInvestigateUsage(t *testing.T) {
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "investigate", testArtefacts, nil, "", nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "investigate", testArtefacts, nil, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "Usage") {
@@ -767,7 +782,7 @@ func TestDispatchInvestigateUsage(t *testing.T) {
 
 func TestDispatchInvestigateNonNumericID(t *testing.T) {
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "investigate notanumber", testArtefacts, nil, "", nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "investigate notanumber", testArtefacts, nil, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "Invalid artefact ID") {
@@ -777,7 +792,7 @@ func TestDispatchInvestigateNonNumericID(t *testing.T) {
 
 func TestDispatchInvestigateUnknownID(t *testing.T) {
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "investigate 9999", testArtefacts, nil, "", nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "investigate 9999", testArtefacts, nil, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "not found") {
@@ -792,7 +807,7 @@ func TestDispatchInvestigateNoLLM(t *testing.T) {
 			ImageURL: "https://cdimage.ubuntu.com/ubuntu/noble/daily-live/20260101/noble-desktop-amd64.iso"},
 	}
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "investigate 42", artefacts, nil, "", nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "investigate 42", artefacts, nil, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "OPENROUTER_API_KEY") {
@@ -808,7 +823,7 @@ func TestDispatchInvestigateNoImageURL(t *testing.T) {
 	hook := &captureNotifier{}
 	lf := &mockLogFetcher{content: "some log"}
 	llm := &mockLLMClient{response: `{"category":"unknown","hypothesis":"x","log_excerpts":[],"next_action":"y"}`}
-	if err := Dispatch(context.Background(), "test", "investigate 7", artefacts, nil, "", nil, nil, hook, "", nil, lf, llm, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "investigate 7", artefacts, nil, nil, nil, hook, "", nil, lf, llm, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "No log URL") {
@@ -826,7 +841,7 @@ func TestDispatchInvestigateSuccess(t *testing.T) {
 	llm := &mockLLMClient{response: llmResp}
 
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "investigate 42", artefacts, nil, "", nil, nil, hook, "", nil, lf, llm, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "investigate 42", artefacts, nil, nil, nil, hook, "", nil, lf, llm, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	// First Send call is the "fetching…" progress message; second is the report.
@@ -873,7 +888,7 @@ func TestDispatchInvestigateWithLaunchpad(t *testing.T) {
 	llm := &mockLLMClient{response: llmResp}
 
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "investigate 42", artefacts, nil, "", nil, nil, hook, "", nil, lf, llm, lp, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "investigate 42", artefacts, nil, nil, nil, hook, "", nil, lf, llm, lp, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "Launchpad librarian") {
@@ -897,7 +912,7 @@ func TestDispatchInvestigateLaunchpadFallback(t *testing.T) {
 	llm := &mockLLMClient{response: llmResp}
 
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "investigate 42", artefacts, nil, "", nil, nil, hook, "", nil, lf, llm, lp, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "investigate 42", artefacts, nil, nil, nil, hook, "", nil, lf, llm, lp, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "cd-build-log") {
@@ -914,7 +929,7 @@ func TestDispatchInvestigateLLMError(t *testing.T) {
 	llm := &mockLLMClient{err: fmt.Errorf("LLM unavailable")}
 
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "investigate 42", artefacts, nil, "", nil, nil, hook, "", nil, lf, llm, nil, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "investigate 42", artefacts, nil, nil, nil, hook, "", nil, lf, llm, nil, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(hook.last, "Investigation failed") {

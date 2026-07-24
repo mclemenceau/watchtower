@@ -292,11 +292,11 @@ func FormatTestsStatusRelease(artefacts []domain.Artefact, release, product stri
 //	 - ubuntu-desktop (amd64, arm64)
 //	 - ubuntu-base (riscv64)
 //
-// releases controls which releases to include and in which order. When nil or
+// releasesScope controls which releases to include and in which order. When nil or
 // empty, all releases present in artefacts are used (sorted alphabetically).
 // Artefacts are expected to be pre-filtered by the caller (e.g. SummaryForProducts
 // already applied).
-func FormatScheduledSummary(artefacts []domain.Artefact, releases []string) string {
+func FormatScheduledSummary(artefacts []domain.Artefact, releasesScope []string) string {
 	if len(artefacts) == 0 {
 		return "No snapshot available yet — the first fetch is still in progress."
 	}
@@ -308,7 +308,7 @@ func FormatScheduledSummary(artefacts []domain.Artefact, releases []string) stri
 	}
 
 	// Determine release order.
-	ordered := releases
+	ordered := releasesScope
 	if len(ordered) == 0 {
 		for r := range byRelease {
 			ordered = append(ordered, r)

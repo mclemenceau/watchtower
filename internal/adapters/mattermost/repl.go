@@ -16,12 +16,11 @@ import (
 
 // RunREPL reads lines from in (simulating incoming Mattermost messages), dispatches
 // each to application.Dispatch, and sends replies via notifier. Blocks until in is
-// closed or ctx is cancelled. defaultRelease pins the status table to a specific
-// release (empty = auto-detect from snapshot). summaryForProducts restricts all views
-// to those product/OS names (nil = all). summaryForReleases is the ordered release
-// list used by the `summary` command (nil = all). keyword is the optional trigger
-// prefix (e.g. "@watchtower"); pass empty string to dispatch every line regardless
-// of prefix. resolver is optional; pass nil to disable LLM-assisted intent resolution.
+// closed or ctx is cancelled. releasesScope is the ordered release scope used by
+// all operations (nil = all). summaryForProducts restricts all views to those
+// product/OS names (nil = all). keyword is the optional trigger prefix (e.g.
+// "@watchtower"); pass empty string to dispatch every line regardless of prefix.
+// resolver is optional; pass nil to disable LLM-assisted intent resolution.
 // logFetcher, llm, and launchpad are optional; pass nil to disable the investigate command.
 // failures is the FailureStore port; pass nil to disable failure commands.
 // triggerAnalysis is called when the user requests on-demand analysis; pass nil to disable.
@@ -31,9 +30,8 @@ func RunREPL(
 	notifier ports.Notifier,
 	snap *state.Snapshot,
 	failures ports.FailureStorePort,
-	defaultRelease string,
+	releasesScope []string,
 	summaryForProducts []string,
-	summaryForReleases []string,
 	keyword string,
 	resolver *intent.Resolver,
 	logFetcher ports.LogFetcher,
@@ -83,7 +81,7 @@ func RunREPL(
 
 		if dispatchErr := application.Dispatch(
 			ctx, "repl", line, artefacts, failureStore,
-			defaultRelease, summaryForProducts, summaryForReleases,
+			releasesScope, summaryForProducts,
 			notifier, keyword, resolver, logFetcher, llm, launchpad,
 			triggerAnalysis,
 		); dispatchErr != nil {

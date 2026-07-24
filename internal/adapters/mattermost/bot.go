@@ -263,9 +263,8 @@ func RunBot(
 	cfg BotConfig,
 	snap *state.Snapshot,
 	failures ports.FailureStorePort,
-	defaultRelease string,
+	releasesScope []string,
 	summaryForProducts []string,
-	summaryForReleases []string,
 	httpClient *http.Client,
 	resolver *intent.Resolver,
 	logFetcher ports.LogFetcher,
@@ -295,7 +294,7 @@ func RunBot(
 	log.Printf("mattermost bot: connecting to %s (keyword: %q)", cfg.ServerURL, keyword)
 
 	for {
-		if err := runBotSession(ctx, cfg, keyword, snap, failures, defaultRelease, summaryForProducts, summaryForReleases, httpClient, resolver, logFetcher, llm, launchpad, triggerAnalysis); err != nil {
+		if err := runBotSession(ctx, cfg, keyword, snap, failures, releasesScope, summaryForProducts, httpClient, resolver, logFetcher, llm, launchpad, triggerAnalysis); err != nil {
 			if ctx.Err() != nil {
 				log.Print("mattermost bot: context cancelled, shutting down")
 				return
@@ -319,9 +318,8 @@ func runBotSession(
 	keyword string,
 	snap *state.Snapshot,
 	failures ports.FailureStorePort,
-	defaultRelease string,
+	releasesScope []string,
 	summaryForProducts []string,
-	summaryForReleases []string,
 	httpClient *http.Client,
 	resolver *intent.Resolver,
 	logFetcher ports.LogFetcher,
@@ -503,7 +501,7 @@ func runBotSession(
 		go func(n ports.Notifier, sid, command string, fs domain.FailureStore) {
 			if err := application.Dispatch(
 				ctx, sid, command, artefacts, fs,
-				defaultRelease, summaryForProducts, summaryForReleases,
+				releasesScope, summaryForProducts,
 				n, "", resolver, logFetcher, llm, launchpad,
 				triggerAnalysis,
 			); err != nil {

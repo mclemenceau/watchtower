@@ -21,8 +21,7 @@ type Activities struct {
 	Failures           ports.FailureStorePort
 	Hook               ports.Notifier
 	LogFetcher         ports.LogFetcher
-	DefaultRelease     string   // pin status table to this release; empty = auto-detect
-	SummaryForReleases []string // ordered release list for scheduled summary; nil = all
+	ReleasesScope      []string // ordered release scope for all operations; nil = all
 	SummaryForProducts []string // restrict summaries to these OS/product names; nil = all
 	LLM                ports.LLMClient
 	MaxAnalysisPerRun  int // cap on LLM calls per FailureAnalysisWorkflow run; 0 = default (5)
@@ -32,6 +31,18 @@ func (a *Activities) FetchBuildStatus(ctx context.Context) ([]domain.Artefact, e
 	artefacts, err := a.Artefacts.FetchArtefacts(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("FetchBuildStatus: %w", err)
+	}
+	// Apply release scope early: discard artefacts outside the configured scope
+	// so that all downstream operations (FetchTestExecutions, Diff, storage) only
+	// handle the releases we care about, reducing API call count and storage size.
+	if len(a.ReleasesScope) > 0 {
+		var scoped []domain.Artefact
+		for _, art := range artefacts {
+			if releaseInScope(a.ReleasesScope, art.Release) {
+				scoped = append(scoped, art)
+			}
+		}
+		artefacts = scoped
 	}
 	return artefacts, nil
 }
@@ -69,9 +80,13 @@ func (a *Activities) SaveSnapshot(_ context.Context, artefacts []domain.Artefact
 }
 
 // FormatStatusTable renders a status table for the configured release.
-// If DefaultRelease is empty it falls back to auto-detecting the most active release.
+// If ReleasesScope has entries it uses the first as the pinned release;
+// otherwise it falls back to auto-detecting the most active release.
 func (a *Activities) FormatStatusTable(_ context.Context, artefacts []domain.Artefact) (string, error) {
-	release := a.DefaultRelease
+	release := ""
+	if len(a.ReleasesScope) > 0 {
+		release = a.ReleasesScope[0]
+	}
 	if release == "" {
 		release = state.LatestRelease(artefacts)
 	}
@@ -134,7 +149,7 @@ func (a *Activities) PostSummary(ctx context.Context) error {
 		artefacts = filtered
 	}
 
-	msg := application.FormatScheduledSummary(artefacts, a.SummaryForReleases)
+	msg := application.FormatScheduledSummary(artefacts, a.ReleasesScope)
 	return a.NotifyChannel(ctx, msg)
 }
 
@@ -142,6 +157,16 @@ func (a *Activities) PostSummary(ctx context.Context) error {
 func containsSummaryProduct(list []string, product string) bool {
 	for _, p := range list {
 		if strings.EqualFold(p, product) {
+			return true
+		}
+	}
+	return false
+}
+
+// releaseInScope reports whether release (case-insensitive) is in the scope list.
+func releaseInScope(scope []string, release string) bool {
+	for _, r := range scope {
+		if strings.EqualFold(r, release) {
 			return true
 		}
 	}
