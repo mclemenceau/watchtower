@@ -172,11 +172,17 @@ func (a *Activities) SaveFailures(_ context.Context, store domain.FailureStore) 
 }
 
 // UpdateFailureRecords merges a ChangeReport into the persisted FailureStore:
-//   - NewFailures → upsert (create or increment occurrences)
-//   - Recoveries  → mark resolved (silently, no notification per spec)
+//   - NewFailures  → upsert (create or increment occurrences)
+//   - NewArtefacts → upsert when already MARKED_AS_FAILED (first-boot seeding)
+//   - Recoveries   → mark resolved (silently, no notification per spec)
 //
 // The artefacts slice is used to look up Release and OS for each delta, since
 // ArtefactDelta only carries Name/Release/Version, not OS/product.
+// NewArtefacts handling is critical for the first-boot case: when Watchtower
+// starts with an empty failures.json but a snapshot that already contains
+// MARKED_AS_FAILED artefacts, Diff produces NewArtefacts (not NewFailures)
+// because there is no previous status to transition from. Without this path
+// those failures would never be recorded.
 func (a *Activities) UpdateFailureRecords(_ context.Context, report domain.ChangeReport, artefacts []domain.Artefact) error {
 	if a.Failures == nil {
 		return nil
@@ -199,6 +205,15 @@ func (a *Activities) UpdateFailureRecords(_ context.Context, report domain.Chang
 			continue
 		}
 		store.UpsertFailure(art)
+	}
+
+	// Seed failures for brand-new artefacts that are already MARKED_AS_FAILED.
+	// This covers the first-boot case where no old snapshot exists so Diff
+	// cannot observe a status transition.
+	for _, art := range report.NewArtefacts {
+		if art.Status == "MARKED_AS_FAILED" {
+			store.UpsertFailure(art)
+		}
 	}
 
 	for _, delta := range report.Recoveries {

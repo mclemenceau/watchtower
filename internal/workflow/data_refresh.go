@@ -58,8 +58,11 @@ func DataRefreshWorkflow(ctx sdk.Context) error {
 
 	// 5. Diff old vs fresh and update the failure store (upsert new failures,
 	//    mark recoveries as resolved). This is deterministic and cheap — no LLM.
+	// Also run when there are new artefacts: some may already be MARKED_AS_FAILED
+	// (first-boot seeding — Diff has no old status to transition from so they
+	// appear as NewArtefacts rather than NewFailures).
 	report := state.Diff(old, enriched)
-	if len(report.NewFailures) > 0 || len(report.Recoveries) > 0 {
+	if len(report.NewFailures) > 0 || len(report.Recoveries) > 0 || len(report.NewArtefacts) > 0 {
 		if err := sdk.ExecuteActivity(ctx, act.UpdateFailureRecords, report, enriched).Get(ctx, nil); err != nil {
 			// Non-fatal: failure store update failing should not abort the refresh.
 			sdk.GetLogger(ctx).Warn("UpdateFailureRecords failed", "error", err)
