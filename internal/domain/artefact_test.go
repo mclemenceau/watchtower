@@ -449,6 +449,34 @@ const preinstalledLog = `ubuntu-desktop-preinstalled-arm64-raspi on Launchpad st
 ubuntu-desktop-preinstalled-arm64-raspi on Launchpad finished at 2026-07-24 04:34:35 (Failed to build)
 `
 
+// cdimageTracebackLog reflects a cd-build-log where run_live_builds in cdimage
+// crashed before posting any builds to Launchpad (e.g. LP returned 400 Bad Request).
+// No "on Launchpad starting at" lines are present for any arch.
+const cdimageTracebackLog = `===== Building live filesystems =====
+Fri Jul 24 08:18:43 UTC 2026
+Traceback (most recent call last):
+  File "/srv/cdimage.ubuntu.com/bin/../lib/cdimage/build.py", line 530, in build_image_set_locked
+    builds = run_live_builds(config)
+  File "/srv/cdimage.ubuntu.com/bin/../lib/cdimage/livefs.py", line 259, in run_live_builds
+    lp_build = lp_livefs.requestBuild(**lp_kwargs)
+  File "/srv/cdimage.ubuntu.com/bin/../lib/cdimage/launchpad.py", line 109, in requestBuild
+    self._current_build_cache[archtag][unique_key] = self._lp_livefs.requestBuild(
+  File "/usr/lib/python3/dist-packages/lazr/restfulclient/resource.py", line 592, in __call__
+    response, content = self.root._browser._request(
+  File "/usr/lib/python3/dist-packages/lazr/restfulclient/_browser.py", line 429, in _request
+    raise error
+lazr.restfulclient.errors.BadRequest: HTTP Error 400: Bad Request
+`
+
+// unrelatedTracebackLog contains a Python traceback that is NOT from run_live_builds
+// (e.g. from a post-processing script). Should not be treated as an infra failure.
+const unrelatedTracebackLog = `===== Post-processing =====
+Traceback (most recent call last):
+  File "/srv/cdimage.ubuntu.com/bin/post-process.py", line 42, in publish_images
+    upload_to_mirror(path)
+AttributeError: 'NoneType' object has no attribute 'upload'
+`
+
 // preinstalledServerLog reflects the real daily-preinstalled log format where labels
 // use "{product}-{arch}-{variant}" rather than bare arch tokens.
 // Artefacts like "stonking-preinstalled-server-amd64.img.xz" (arch="amd64") or
@@ -570,6 +598,11 @@ func TestParseBuildStatusFromLog(t *testing.T) {
 		{"preinstalled arm64-generic failed", preinstalledServerLog, "arm64-generic", BuildStatusFailed},
 		// riscv64-generic → FAILED.
 		{"preinstalled riscv64-generic failed", preinstalledServerLog, "riscv64-generic", BuildStatusFailed},
+		// cdimage run_live_builds traceback → FAILED for any arch (infra crash before LP).
+		{"run_live_builds traceback, amd64", cdimageTracebackLog, "amd64", BuildStatusFailed},
+		{"run_live_builds traceback, arm64", cdimageTracebackLog, "arm64", BuildStatusFailed},
+		// Traceback from an unrelated script (no "in run_live_builds") → NOT_STARTED.
+		{"unrelated traceback, amd64", unrelatedTracebackLog, "amd64", BuildStatusNotStarted},
 	}
 
 	for _, tc := range cases {

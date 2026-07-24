@@ -619,13 +619,25 @@ func ResolveLogLabel(logPrefix, arch string) string {
 //
 // Detection rules:
 //   - Empty content                                    → BuildStatusNotStarted
+//   - Traceback from run_live_builds (cdimage crash)   → BuildStatusFailed
 //   - No "starting at" line for this arch              → BuildStatusNotStarted
 //   - "starting at" present, no "finished at" yet      → BuildStatusInProgress
 //   - "finished at" with "(Successfully built)"        → BuildStatusBuilt
 //   - "finished at" with any other suffix              → BuildStatusFailed
+//
+// The run_live_builds traceback case is an infrastructure failure: cdimage itself
+// crashed before posting any builds to Launchpad (e.g. Launchpad returned a 400
+// Bad Request when requesting a build). No "starting at" lines will be present for
+// any arch. The detection is arch-agnostic because the crash affects all arches.
 func ParseBuildStatusFromLog(logContent, arch string) BuildStatusState {
 	if logContent == "" || arch == "" {
 		return BuildStatusNotStarted
+	}
+
+	// A run_live_builds traceback means cdimage itself crashed before posting any
+	// builds to Launchpad. This is an infrastructure failure regardless of arch.
+	if hasRunLiveBuildsTraceback(logContent) {
+		return BuildStatusFailed
 	}
 
 	// Normalise arch for matching: "arm64+raspi" → "arm64-raspi".
@@ -683,4 +695,17 @@ func labelMatchesArch(label, normArch string) bool {
 	label = strings.ToLower(label)
 	arch := strings.ToLower(normArch)
 	return strings.HasSuffix(label, "-"+arch) || label == arch
+}
+
+// hasRunLiveBuildsTraceback reports whether the cd-build-log content contains a
+// Python traceback that passed through run_live_builds in cdimage. This indicates
+// an infrastructure failure: cdimage crashed before it could post any builds to
+// Launchpad, so no "on Launchpad starting at" lines will appear for any arch.
+//
+// Detection requires both markers to be present:
+//   - "Traceback (most recent call last):" — standard Python traceback header
+//   - "in run_live_builds" — confirms the crash site is in cdimage's livefs.py
+func hasRunLiveBuildsTraceback(logContent string) bool {
+	return strings.Contains(logContent, "Traceback (most recent call last):") &&
+		strings.Contains(logContent, "in run_live_builds")
 }
