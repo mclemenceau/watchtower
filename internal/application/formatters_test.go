@@ -145,7 +145,61 @@ func TestFormatBuildsStatusRelease_ProductFilter(t *testing.T) {
 	}
 }
 
-// --- FormatTestsStatusSummary ---
+func TestFormatBuildsStatusRelease_FailedWithDescription(t *testing.T) {
+	artefacts := []domain.Artefact{
+		{
+			ID: 1, Name: "stonking-wsl-amd64.wsl", OS: "ubuntu-wsl", Release: "stonking",
+			Version:                 "20260720",
+			BuildLog:                domain.BuildStatusFailed,
+			BuildFailureKind:        domain.BuildFailureKindInfra,
+			BuildFailureDescription: "cdimage crashed before submitting builds to Launchpad",
+		},
+	}
+	out := FormatBuildsStatusRelease(artefacts, "stonking", "")
+	want := "❌ INFRA: cdimage crashed before submitting builds to Launchpad"
+	if !strings.Contains(out, want) {
+		t.Errorf("expected %q in output, got:\n%s", want, out)
+	}
+}
+
+func TestFormatBuildsStatusRelease_FailedKindNoDescription(t *testing.T) {
+	// FailureKind set but no description — shows "❌ PRODUCT" without colon suffix.
+	artefacts := []domain.Artefact{
+		{
+			ID: 2, Name: "stonking-preinstalled-server-arm64+raspi.img.xz", OS: "ubuntu-server",
+			Release:          "stonking",
+			Version:          "20260720",
+			BuildLog:         domain.BuildStatusFailed,
+			BuildFailureKind: domain.BuildFailureKindProduct,
+		},
+	}
+	out := FormatBuildsStatusRelease(artefacts, "stonking", "")
+	if !strings.Contains(out, "❌ PRODUCT") {
+		t.Errorf("expected '❌ PRODUCT' in output, got:\n%s", out)
+	}
+	if strings.Contains(out, "❌ PRODUCT:") {
+		t.Errorf("expected no colon after PRODUCT when description is empty, got:\n%s", out)
+	}
+}
+
+func TestFormatBuildsStatusRelease_FailedNoKind(t *testing.T) {
+	// No kind set — shows plain "❌".
+	artefacts := []domain.Artefact{
+		{
+			ID: 3, Name: "stonking-desktop-arm64.iso", OS: "ubuntu",
+			Release:  "stonking",
+			Version:  "20260720",
+			BuildLog: domain.BuildStatusFailed,
+		},
+	}
+	out := FormatBuildsStatusRelease(artefacts, "stonking", "")
+	if !strings.Contains(out, "❌") {
+		t.Errorf("expected ❌ in output, got:\n%s", out)
+	}
+	if strings.Contains(out, "INFRA") || strings.Contains(out, "PRODUCT") {
+		t.Errorf("expected no kind label when BuildFailureKind is empty, got:\n%s", out)
+	}
+}
 
 func TestFormatTestsStatusSummary_ColumnHeaders(t *testing.T) {
 	env := domain.Environment{Name: "jenkins", Architecture: "amd64"}

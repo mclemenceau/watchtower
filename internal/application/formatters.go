@@ -413,14 +413,19 @@ func effectiveBuildLog(art domain.Artefact) domain.BuildStatusState {
 }
 
 // artefactStatusCell returns the display cell for an artefact's build status.
-// For failed builds it appends a kind label to distinguish infra from product failures:
-//   - "❌ INFRA"   — cdimage crash / Launchpad builder problem (Phase 1 or Chroot problem)
-//   - "❌ PRODUCT" — Launchpad build failure (Phase 2: deps, debootstrap, snaps, etc.)
+// For failed builds it appends a kind label and, when available, a short
+// description to distinguish the failure cause:
+//   - "❌ INFRA: cdimage crashed before submitting builds to Launchpad"
+//   - "❌ PRODUCT: livefs build failure requires analysis"
+//   - "❌ INFRA"   — kind known but no description set
 //   - "❌"         — failed but kind not yet classified
 func artefactStatusCell(art domain.Artefact) string {
 	status := effectiveBuildLog(art)
 	icon := domain.BuildLogIcon(status)
 	if status == domain.BuildStatusFailed && art.BuildFailureKind != "" {
+		if art.BuildFailureDescription != "" {
+			return icon + " " + string(art.BuildFailureKind) + ": " + art.BuildFailureDescription
+		}
 		return icon + " " + string(art.BuildFailureKind)
 	}
 	return icon
