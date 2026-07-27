@@ -38,6 +38,37 @@ const (
 	BuildStatusUnknown BuildStatusState = "UNKNOWN"
 )
 
+// BuildFailureKind classifies the root cause of a build failure into two high-level
+// categories that reflect where in the two-phase build pipeline the failure occurred.
+//
+// Phase 1 — cdimage orchestration: the cd-build-log shows a Python traceback or
+// orphaned arches (started but never finished due to a cdimage crash). These are
+// infrastructure issues: disk full on the cdimage host, Launchpad API errors, etc.
+//
+// Phase 2 — Launchpad build: the build was submitted to Launchpad but the LP builder
+// itself reported failure ("Failed to build"). These are typically product issues:
+// dependency conflicts, debootstrap errors, snap failures, etc.
+//
+// Exception: "(Chroot problem)" is reported by Launchpad but indicates an LP builder
+// infrastructure problem, not a product defect — it is classified as INFRA.
+type BuildFailureKind string
+
+const (
+	// BuildFailureKindNone means the artefact did not fail (not applicable).
+	BuildFailureKindNone BuildFailureKind = ""
+	// BuildFailureKindInfra means the failure occurred in Phase 1 (cdimage crashed
+	// before or during Launchpad submission) or is a Launchpad builder infra problem
+	// (Chroot problem). Owner: infrastructure / cdimage team.
+	BuildFailureKindInfra BuildFailureKind = "INFRA"
+	// BuildFailureKindProduct means the failure occurred in Phase 2: Launchpad
+	// accepted the build but the LP builder reported "Failed to build". Owner: product
+	// team / archive (dependency conflicts, debootstrap failures, snap errors, etc.).
+	BuildFailureKindProduct BuildFailureKind = "PRODUCT"
+	// BuildFailureKindUnknown means the build failed but the cause cannot be
+	// categorised from the available log content.
+	BuildFailureKindUnknown BuildFailureKind = "UNKNOWN"
+)
+
 // BuildLogIcon returns the display emoji for a BuildStatusState.
 func BuildLogIcon(s BuildStatusState) string {
 	switch s {
@@ -60,17 +91,18 @@ func BuildLogIcon(s BuildStatusState) string {
 // omitted from JSON when empty so existing snapshot files remain compatible.
 // BuildLog is computed from the cd-build-log at fetch time and persisted in the snapshot.
 type Artefact struct {
-	ID       int              `json:"id"`
-	Name     string           `json:"name"`
-	Version  string           `json:"version"` // YYYYMMDD or YYYYMMDD.N (respin); today's date means build succeeded and image is available for testing
-	OS       string           `json:"os"`
-	Release  string           `json:"release"`
-	Stage    string           `json:"stage"`  // pending | current — pipeline release stage, not build state
-	Status   string           `json:"status"` // APPROVED | MARKED_AS_FAILED | UNDECIDED — test review state, unrelated to build availability
-	Archived bool             `json:"archived"`
-	ImageURL string           `json:"image_url"`
-	BuildLog BuildStatusState `json:"build_log,omitempty"` // enriched build status derived from today's cd-build-log
-	Builds   []ArtefactBuild  `json:"builds,omitempty"`    // cached from /v1/artefacts/{id}/builds
+	ID               int              `json:"id"`
+	Name             string           `json:"name"`
+	Version          string           `json:"version"` // YYYYMMDD or YYYYMMDD.N (respin); today's date means build succeeded and image is available for testing
+	OS               string           `json:"os"`
+	Release          string           `json:"release"`
+	Stage            string           `json:"stage"`  // pending | current — pipeline release stage, not build state
+	Status           string           `json:"status"` // APPROVED | MARKED_AS_FAILED | UNDECIDED — test review state, unrelated to build availability
+	Archived         bool             `json:"archived"`
+	ImageURL         string           `json:"image_url"`
+	BuildLog         BuildStatusState `json:"build_log,omitempty"`          // enriched build status derived from today's cd-build-log
+	BuildFailureKind BuildFailureKind `json:"build_failure_kind,omitempty"` // failure category when BuildLog==FAILED: INFRA or PRODUCT
+	Builds           []ArtefactBuild  `json:"builds,omitempty"`             // cached from /v1/artefacts/{id}/builds
 }
 
 // ArtefactBuild represents one architecture-specific build of an artefact,
@@ -606,38 +638,41 @@ func ResolveLogLabel(logPrefix, arch string) string {
 	return arch
 }
 
-// ParseBuildStatusFromLog determines the build status for a specific architecture
-// by scanning the content of a cd-build-log.
+// ParseBuildStatusFromLog determines the build status and failure kind for a specific
+// architecture by scanning the content of a cd-build-log.
 //
 // The function looks for lines of the form:
 //
 //	{label} on Launchpad starting at {datetime}
 //	{label} on Launchpad finished at {datetime} ({result})
 //
-// where {label} is a substring-matched against the normalised arch (e.g. "amd64"
+// where {label} is suffix-matched against the normalised arch (e.g. "amd64"
 // matches "ubuntu-amd64", "ubuntu-server-live-amd64", etc.).
 //
-// Detection rules:
-//   - Empty content                                    → BuildStatusNotStarted
-//   - Traceback from run_live_builds (cdimage crash)   → BuildStatusFailed
-//   - No "starting at" line for this arch              → BuildStatusNotStarted
-//   - "starting at" present, no "finished at" yet      → BuildStatusInProgress
-//   - "finished at" with "(Successfully built)"        → BuildStatusBuilt
-//   - "finished at" with any other suffix              → BuildStatusFailed
+// Status detection rules:
+//   - Empty content or empty arch                      → NOT_STARTED, kind=none
+//   - Phase 1 infra failure (cdimage crash)            → FAILED, kind=INFRA
+//   - No "starting at" line for this arch              → NOT_STARTED, kind=none
+//   - "starting at" present, no "finished at" yet      → IN_PROGRESS, kind=none
+//   - "finished at" with "(Successfully built)"        → BUILT, kind=none
+//   - "finished at" with "(Chroot problem)"            → FAILED, kind=INFRA  (LP builder infra)
+//   - "finished at" with any other non-success suffix  → FAILED, kind=PRODUCT
 //
-// The run_live_builds traceback case is an infrastructure failure: cdimage itself
-// crashed before posting any builds to Launchpad (e.g. Launchpad returned a 400
-// Bad Request when requesting a build). No "starting at" lines will be present for
-// any arch. The detection is arch-agnostic because the crash affects all arches.
-func ParseBuildStatusFromLog(logContent, arch string) BuildStatusState {
+// Phase 1 infra detection covers two cases:
+//  1. A Python traceback containing "in run_live_builds" (cdimage crashed before
+//     submitting builds to Launchpad — no "starting at" lines appear).
+//  2. Any Python traceback present in the log AND this arch has a "starting at" line
+//     but no "finished at" line (cdimage crashed mid-run, orphaning in-flight builds).
+//     Examples: "OSError: [Errno 28] No space left on device".
+func ParseBuildStatusFromLog(logContent, arch string) (BuildStatusState, BuildFailureKind) {
 	if logContent == "" || arch == "" {
-		return BuildStatusNotStarted
+		return BuildStatusNotStarted, BuildFailureKindNone
 	}
 
-	// A run_live_builds traceback means cdimage itself crashed before posting any
-	// builds to Launchpad. This is an infrastructure failure regardless of arch.
+	// Phase 1 check A: run_live_builds traceback means cdimage crashed before
+	// posting any builds to Launchpad. Arch-agnostic — all arches are affected.
 	if hasRunLiveBuildsTraceback(logContent) {
-		return BuildStatusFailed
+		return BuildStatusFailed, BuildFailureKindInfra
 	}
 
 	// Normalise arch for matching: "arm64+raspi" → "arm64-raspi".
@@ -646,12 +681,13 @@ func ParseBuildStatusFromLog(logContent, arch string) BuildStatusState {
 	started := false
 	finished := false
 	finishedSuccess := false
+	finishedChroot := false
 
 	for _, line := range strings.Split(logContent, "\n") {
 		line = strings.TrimSpace(line)
 
 		// Match lines containing "on Launchpad starting at" or "on Launchpad finished at".
-		// The label before "on Launchpad" is checked by substring against normArch.
+		// The label before "on Launchpad" is checked by suffix against normArch.
 		if idx := strings.Index(line, " on Launchpad starting at "); idx >= 0 {
 			label := line[:idx]
 			if labelMatchesArch(label, normArch) {
@@ -663,9 +699,8 @@ func ParseBuildStatusFromLog(logContent, arch string) BuildStatusState {
 			label := line[:idx]
 			if labelMatchesArch(label, normArch) {
 				finished = true
-				// Check the result suffix: "(Successfully built)" means success.
-				// Anything else (e.g. "(Failed to build)", "(Chroot problem)") is a failure.
 				finishedSuccess = strings.Contains(line, "(Successfully built)")
+				finishedChroot = strings.Contains(line, "(Chroot problem)")
 			}
 			continue
 		}
@@ -673,16 +708,27 @@ func ParseBuildStatusFromLog(logContent, arch string) BuildStatusState {
 
 	switch {
 	case !started:
-		return BuildStatusNotStarted
+		return BuildStatusNotStarted, BuildFailureKindNone
 	case !finished:
-		return BuildStatusInProgress
+		// Phase 1 check B: build started but never finished AND the log contains any
+		// Python traceback — cdimage crashed mid-run (e.g. disk full on the cdimage host).
+		// The arch is treated as an orphaned victim of the infra crash.
+		if hasAnyTraceback(logContent) {
+			return BuildStatusFailed, BuildFailureKindInfra
+		}
+		return BuildStatusInProgress, BuildFailureKindNone
 	case finishedSuccess:
 		// The build finished successfully on Launchpad, but the artefact may not yet be
 		// in Test Observer (publishing can lag). Callers should prefer checking
 		// IsBuiltToday first; this value is returned only for log-only assessment.
-		return BuildStatusBuilt
+		return BuildStatusBuilt, BuildFailureKindNone
+	case finishedChroot:
+		// "(Chroot problem)" is reported by Launchpad but reflects an LP builder
+		// infrastructure failure, not a product defect.
+		return BuildStatusFailed, BuildFailureKindInfra
 	default:
-		return BuildStatusFailed
+		// "(Failed to build)" or any other non-success suffix: Phase 2 product failure.
+		return BuildStatusFailed, BuildFailureKindProduct
 	}
 }
 
@@ -699,8 +745,8 @@ func labelMatchesArch(label, normArch string) bool {
 
 // hasRunLiveBuildsTraceback reports whether the cd-build-log content contains a
 // Python traceback that passed through run_live_builds in cdimage. This indicates
-// an infrastructure failure: cdimage crashed before it could post any builds to
-// Launchpad, so no "on Launchpad starting at" lines will appear for any arch.
+// a Phase 1 infrastructure failure: cdimage crashed before it could post any builds
+// to Launchpad, so no "on Launchpad starting at" lines will appear for any arch.
 //
 // Detection requires both markers to be present:
 //   - "Traceback (most recent call last):" — standard Python traceback header
@@ -708,4 +754,12 @@ func labelMatchesArch(label, normArch string) bool {
 func hasRunLiveBuildsTraceback(logContent string) bool {
 	return strings.Contains(logContent, "Traceback (most recent call last):") &&
 		strings.Contains(logContent, "in run_live_builds")
+}
+
+// hasAnyTraceback reports whether the cd-build-log contains any Python traceback.
+// This is used as a secondary Phase 1 infra signal: if a traceback is present and
+// a specific arch's build was started but never finished, cdimage likely crashed
+// mid-run (e.g. disk full on the cdimage host), orphaning the in-flight builds.
+func hasAnyTraceback(logContent string) bool {
+	return strings.Contains(logContent, "Traceback (most recent call last):")
 }

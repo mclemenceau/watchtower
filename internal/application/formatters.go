@@ -412,10 +412,18 @@ func effectiveBuildLog(art domain.Artefact) domain.BuildStatusState {
 	return domain.BuildStatusNotStarted
 }
 
-// artefactStatusCell returns the display cell (emoji) for an artefact's build status,
-// using the enriched BuildLog state when available or falling back to version-based logic.
+// artefactStatusCell returns the display cell for an artefact's build status.
+// For failed builds it appends a kind label to distinguish infra from product failures:
+//   - "❌ INFRA"   — cdimage crash / Launchpad builder problem (Phase 1 or Chroot problem)
+//   - "❌ PRODUCT" — Launchpad build failure (Phase 2: deps, debootstrap, snaps, etc.)
+//   - "❌"         — failed but kind not yet classified
 func artefactStatusCell(art domain.Artefact) string {
-	return domain.BuildLogIcon(effectiveBuildLog(art))
+	status := effectiveBuildLog(art)
+	icon := domain.BuildLogIcon(status)
+	if status == domain.BuildStatusFailed && art.BuildFailureKind != "" {
+		return icon + " " + string(art.BuildFailureKind)
+	}
+	return icon
 }
 func FormatChangeReport(r domain.ChangeReport) string {
 	var sb strings.Builder

@@ -172,8 +172,9 @@ type Artefact struct {
     Status   string `json:"status"`  // APPROVED | MARKED_AS_FAILED | UNDECIDED
     Archived bool   `json:"archived"`
     ImageURL string `json:"image_url"`
-    BuildLog BuildStatusState `json:"build_log,omitempty"` // enriched from cd-build-log
-    Builds   []ArtefactBuild  `json:"builds,omitempty"`
+    BuildLog         BuildStatusState `json:"build_log,omitempty"`          // enriched from cd-build-log
+    BuildFailureKind BuildFailureKind `json:"build_failure_kind,omitempty"` // INFRA or PRODUCT when BuildLog==FAILED
+    Builds           []ArtefactBuild  `json:"builds,omitempty"`
 }
 
 // BuildStatusState is the enriched per-artefact build state derived from today's cd-build-log.
@@ -182,8 +183,16 @@ type Artefact struct {
 //   BUILT        — artefact with today's serial exists in Test Observer
 //   NOT_STARTED  — log unavailable (404) or no "starting at" line for this arch
 //   IN_PROGRESS  — "starting at" present but no "finished at" yet
-//   FAILED       — "finished at" with a non-(Successfully built) result
+//   FAILED       — "finished at" with a non-(Successfully built) result, or cdimage crash
 //   UNKNOWN      — log fetch failed for a non-404 reason
+
+// BuildFailureKind classifies a FAILED build into two phases (omitted for non-failures).
+//
+//   INFRA    — Phase 1: cdimage crash (run_live_builds traceback, disk full, LP API error)
+//              or Phase 2 LP builder infra (Chroot problem). Owner: infra/cdimage team.
+//   PRODUCT  — Phase 2: LP reported "Failed to build" (deps, debootstrap, snaps, etc.).
+//              Owner: product team / archive.
+//   UNKNOWN  — failed but cause cannot be determined from available log content.
 
 type ChangeReport struct {
     NewFailures  []ArtefactDelta `json:"new_failures"`
@@ -211,8 +220,25 @@ The `BuildLog` field provides richer status derived from the cd-build-log:
 | `BUILT` | ✅ | Artefact with today's serial (`YYYYMMDD`) exists in Test Observer |
 | `NOT_STARTED` | ⏳ | Log unavailable (404) or no "starting at" line for this arch — build not triggered yet |
 | `IN_PROGRESS` | 🔄 | "starting at" line found but no "finished at" yet — build running |
-| `FAILED` | ❌ | "finished at" present without `(Successfully built)` — Launchpad reports failure |
+| `FAILED` | ❌ | "finished at" without `(Successfully built)`, or cdimage crash detected |
 | `UNKNOWN` | ❓ | Log fetch failed (non-404) — status indeterminate |
+
+When `BuildLog == FAILED`, the `BuildFailureKind` field classifies the root cause:
+
+| `BuildFailureKind` | Display | Meaning |
+|-------------------|---------|---------|
+| `INFRA` | `❌ INFRA` | Phase 1: cdimage crashed (disk full, LP API error, `run_live_builds` traceback) before or during LP submission; or Phase 2 LP builder infra problem (`Chroot problem`). Owner: infrastructure / cdimage team. |
+| `PRODUCT` | `❌ PRODUCT` | Phase 2: LP accepted the build but the LP builder reported `(Failed to build)` — dependency conflicts, debootstrap failures, snap errors, etc. Owner: product team / archive. |
+| `UNKNOWN` | `❌` | Failed but cause cannot be determined from available log content. |
+
+**Phase 1 infra detection** covers two cases:
+1. `run_live_builds` traceback — cdimage crashed before any LP build was submitted (no `starting at` lines). Example: LP returned HTTP 400 "already pending".
+2. Any Python traceback AND the arch has a `starting at` but no `finished at` — cdimage crashed mid-run, orphaning in-flight builds. Example: `OSError: [Errno 28] No space left on device`.
+
+**Phase 2 classification** is based on the Launchpad result suffix in the cd-build-log:
+- `(Successfully built)` → `BUILT`
+- `(Chroot problem)` → `FAILED`, `INFRA`
+- `(Failed to build)` or any other suffix → `FAILED`, `PRODUCT`
 
 The status is derived from cd-build-log lines of the form:
 

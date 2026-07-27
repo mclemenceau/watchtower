@@ -477,6 +477,29 @@ Traceback (most recent call last):
 AttributeError: 'NoneType' object has no attribute 'upload'
 `
 
+// diskFullLog reflects a cd-build-log where the cdimage host ran out of disk space
+// mid-run. amd64 finished successfully but arm64 and riscv64 were orphaned — they
+// have "starting at" lines but no "finished at" lines because cdimage crashed.
+// This pattern was observed on 2026-07-27 for ubuntu-server/stonking/daily-live.
+const diskFullLog = `===== Building live filesystems =====
+Mon Jul 27 07:55:57 UTC 2026
+ubuntu-server-live-amd64 on Launchpad starting at 2026-07-27 07:55:57
+ubuntu-server-live-amd64: https://launchpad.net/~ubuntu-cdimage/+livefs/ubuntu/stonking/ubuntu-server-live/+build/998432
+ubuntu-server-live-arm64 on Launchpad starting at 2026-07-27 07:56:00
+ubuntu-server-live-arm64: https://launchpad.net/~ubuntu-cdimage/+livefs/ubuntu/stonking/ubuntu-server-live/+build/998434
+ubuntu-server-live-riscv64 on Launchpad starting at 2026-07-27 07:56:08
+ubuntu-server-live-amd64 on Launchpad finished at 2026-07-27 08:32:23 (Successfully built)
+Traceback (most recent call last):
+  File "/usr/lib/python3/dist-packages/httplib2/__init__.py", line 448, in _updateCache
+    cache.set(cachekey, text)
+  File "/usr/lib/python3/dist-packages/lazr/restfulclient/_browser.py", line 265, in set
+    f.close()
+OSError: [Errno 28] No space left on device
+`
+
+// logWithChrotProblem contains a "finished" line with "(Chroot problem)" —
+// a Launchpad builder infrastructure failure, classified as INFRA not PRODUCT.
+
 // preinstalledServerLog reflects the real daily-preinstalled log format where labels
 // use "{product}-{arch}-{variant}" rather than bare arch tokens.
 // Artefacts like "stonking-preinstalled-server-amd64.img.xz" (arch="amd64") or
@@ -559,57 +582,66 @@ func TestResolveLogLabel(t *testing.T) {
 
 func TestParseBuildStatusFromLog(t *testing.T) {
 	cases := []struct {
-		desc    string
-		content string
-		arch    string
-		want    BuildStatusState
+		desc       string
+		content    string
+		arch       string
+		wantStatus BuildStatusState
+		wantKind   BuildFailureKind
 	}{
-		// Empty content → not started.
-		{"empty content", "", "amd64", BuildStatusNotStarted},
-		// Empty arch → not started.
-		{"empty arch", typicalServerLog, "", BuildStatusNotStarted},
-		// amd64 successfully built.
-		{"amd64 successfully built", typicalServerLog, "amd64", BuildStatusBuilt},
-		// arm64 failed.
-		{"arm64 failed", typicalServerLog, "arm64", BuildStatusFailed},
+		// Empty content → not started, no failure kind.
+		{"empty content", "", "amd64", BuildStatusNotStarted, BuildFailureKindNone},
+		// Empty arch → not started, no failure kind.
+		{"empty arch", typicalServerLog, "", BuildStatusNotStarted, BuildFailureKindNone},
+		// amd64 successfully built → BUILT, no failure kind.
+		{"amd64 successfully built", typicalServerLog, "amd64", BuildStatusBuilt, BuildFailureKindNone},
+		// arm64 failed (Failed to build) → FAILED, PRODUCT.
+		{"arm64 failed", typicalServerLog, "arm64", BuildStatusFailed, BuildFailureKindProduct},
 		// arm64-largemem successfully built.
-		{"arm64-largemem built", typicalServerLog, "arm64-largemem", BuildStatusBuilt},
-		// riscv64 started but not finished → in progress.
-		{"riscv64 in progress", typicalServerLog, "riscv64", BuildStatusInProgress},
-		// Desktop build in progress (started, no finished line yet).
-		{"desktop amd64 in progress", desktopLogInProgress, "amd64", BuildStatusInProgress},
-		{"desktop arm64 in progress", desktopLogInProgress, "arm64", BuildStatusInProgress},
+		{"arm64-largemem built", typicalServerLog, "arm64-largemem", BuildStatusBuilt, BuildFailureKindNone},
+		// riscv64 started but not finished, no traceback → IN_PROGRESS, no failure kind.
+		{"riscv64 in progress", typicalServerLog, "riscv64", BuildStatusInProgress, BuildFailureKindNone},
+		// Desktop build in progress (started, no finished line yet, no traceback).
+		{"desktop amd64 in progress", desktopLogInProgress, "amd64", BuildStatusInProgress, BuildFailureKindNone},
+		{"desktop arm64 in progress", desktopLogInProgress, "arm64", BuildStatusInProgress, BuildFailureKindNone},
 		// Arch not present in log → not started.
-		{"s390x not in log", typicalServerLog, "s390x", BuildStatusNotStarted},
-		// Chroot problem suffix → FAILED.
-		{"amd64 chroot problem", logWithChromeProblem, "amd64", BuildStatusFailed},
-		// arm64+raspi: arm64-raspi matches "ubuntu-server-arm64-raspi" via suffix — FAILED.
-		{"arm64-raspi failed", preinstalledLog, "arm64-raspi", BuildStatusFailed},
+		{"s390x not in log", typicalServerLog, "s390x", BuildStatusNotStarted, BuildFailureKindNone},
+		// Chroot problem suffix → FAILED, INFRA (LP builder problem, not product).
+		{"amd64 chroot problem", logWithChromeProblem, "amd64", BuildStatusFailed, BuildFailureKindInfra},
+		// arm64+raspi: arm64-raspi matches "ubuntu-server-arm64-raspi" via suffix — FAILED, PRODUCT.
+		{"arm64-raspi failed", preinstalledLog, "arm64-raspi", BuildStatusFailed, BuildFailureKindProduct},
 		// Arch with "+" normalised to "-" by caller (ArtefactArch already normalises).
-		{"arm64+largemem normalised", typicalServerLog, "arm64+largemem", BuildStatusBuilt},
+		{"arm64+largemem normalised", typicalServerLog, "arm64+largemem", BuildStatusBuilt, BuildFailureKindNone},
 		// Preinstalled server: raw arch "amd64" does NOT match "ubuntu-server-amd64-generic".
 		// After ResolveLogLabel the caller must pass "amd64-generic" instead.
-		{"preinstalled amd64 raw arch no match", preinstalledServerLog, "amd64", BuildStatusNotStarted},
+		{"preinstalled amd64 raw arch no match", preinstalledServerLog, "amd64", BuildStatusNotStarted, BuildFailureKindNone},
 		// With the resolved label "amd64-generic" the match succeeds → BUILT.
-		{"preinstalled amd64-generic built", preinstalledServerLog, "amd64-generic", BuildStatusBuilt},
+		{"preinstalled amd64-generic built", preinstalledServerLog, "amd64-generic", BuildStatusBuilt, BuildFailureKindNone},
 		// arm64 raw arch does not match "ubuntu-server-arm64-generic" or "ubuntu-server-arm64-raspi".
-		{"preinstalled arm64 raw arch no match", preinstalledServerLog, "arm64", BuildStatusNotStarted},
-		// With resolved label "arm64-generic" → FAILED (arm64-generic finished Failed to build).
-		{"preinstalled arm64-generic failed", preinstalledServerLog, "arm64-generic", BuildStatusFailed},
-		// riscv64-generic → FAILED.
-		{"preinstalled riscv64-generic failed", preinstalledServerLog, "riscv64-generic", BuildStatusFailed},
-		// cdimage run_live_builds traceback → FAILED for any arch (infra crash before LP).
-		{"run_live_builds traceback, amd64", cdimageTracebackLog, "amd64", BuildStatusFailed},
-		{"run_live_builds traceback, arm64", cdimageTracebackLog, "arm64", BuildStatusFailed},
-		// Traceback from an unrelated script (no "in run_live_builds") → NOT_STARTED.
-		{"unrelated traceback, amd64", unrelatedTracebackLog, "amd64", BuildStatusNotStarted},
+		{"preinstalled arm64 raw arch no match", preinstalledServerLog, "arm64", BuildStatusNotStarted, BuildFailureKindNone},
+		// With resolved label "arm64-generic" → FAILED, PRODUCT.
+		{"preinstalled arm64-generic failed", preinstalledServerLog, "arm64-generic", BuildStatusFailed, BuildFailureKindProduct},
+		// riscv64-generic → FAILED, PRODUCT.
+		{"preinstalled riscv64-generic failed", preinstalledServerLog, "riscv64-generic", BuildStatusFailed, BuildFailureKindProduct},
+		// cdimage run_live_builds traceback (LP 400) → FAILED, INFRA for any arch.
+		{"run_live_builds traceback, amd64", cdimageTracebackLog, "amd64", BuildStatusFailed, BuildFailureKindInfra},
+		{"run_live_builds traceback, arm64", cdimageTracebackLog, "arm64", BuildStatusFailed, BuildFailureKindInfra},
+		// Disk-full traceback: amd64 finished successfully before crash → BUILT.
+		{"disk full, amd64 built before crash", diskFullLog, "amd64", BuildStatusBuilt, BuildFailureKindNone},
+		// Disk-full traceback: arm64 started but orphaned → FAILED, INFRA.
+		{"disk full, arm64 orphaned", diskFullLog, "arm64", BuildStatusFailed, BuildFailureKindInfra},
+		// Disk-full traceback: riscv64 started but orphaned → FAILED, INFRA.
+		{"disk full, riscv64 orphaned", diskFullLog, "riscv64", BuildStatusFailed, BuildFailureKindInfra},
+		// Disk-full traceback: s390x not in log at all → NOT_STARTED (not orphaned).
+		{"disk full, s390x not in log", diskFullLog, "s390x", BuildStatusNotStarted, BuildFailureKindNone},
+		// Traceback from an unrelated script (no arch started, no run_live_builds) → NOT_STARTED.
+		{"unrelated traceback, amd64", unrelatedTracebackLog, "amd64", BuildStatusNotStarted, BuildFailureKindNone},
 	}
 
 	for _, tc := range cases {
-		got := ParseBuildStatusFromLog(tc.content, tc.arch)
-		if got != tc.want {
-			t.Errorf("ParseBuildStatusFromLog(%q, %q) = %q, want %q",
-				tc.desc, tc.arch, got, tc.want)
+		gotStatus, gotKind := ParseBuildStatusFromLog(tc.content, tc.arch)
+		if gotStatus != tc.wantStatus || gotKind != tc.wantKind {
+			t.Errorf("ParseBuildStatusFromLog(%q, %q) = (%q, %q), want (%q, %q)",
+				tc.desc, tc.arch, gotStatus, gotKind, tc.wantStatus, tc.wantKind)
 		}
 	}
 }

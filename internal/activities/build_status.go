@@ -117,7 +117,9 @@ func (a *Activities) EnrichBuildStatus(ctx context.Context, artefacts []domain.A
 		// ResolveLogLabel returns the appropriate canonical variant (e.g. "amd64-generic").
 		logPrefix := domain.LogPrefixFromImageURL(art.ImageURL)
 		label := domain.ResolveLogLabel(logPrefix, arch)
-		enriched[i].BuildLog = domain.ParseBuildStatusFromLog(content, label)
+		status, failureKind := domain.ParseBuildStatusFromLog(content, label)
+		enriched[i].BuildLog = status
+		enriched[i].BuildFailureKind = failureKind
 	}
 
 	return enriched, nil
