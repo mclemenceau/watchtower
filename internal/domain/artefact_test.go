@@ -515,6 +515,42 @@ Traceback (most recent call last):
 cdimage.livefs.LiveBuildsFailed: No live filesystem builds succeeded.
 `
 
+// testObserverSubmitFailureLog reflects a real daily-live log (edubuntu/stonking,
+// 2026-07-27) where the LP build succeeded and the image was published to cdimage,
+// but the Test Observer API returned a 500 and cdimage logged
+// "Couldn't submit artifact to Test Observer". The artefact is absent from Test
+// Observer despite a clean LP result. This is an INFRA failure at the submission
+// layer, not a build or publishing failure.
+const testObserverSubmitFailureLog = `===== Building live filesystems =====
+Mon Jul 27 00:41:02 UTC 2026
+edubuntu-amd64 on Launchpad starting at 2026-07-27 00:41:02
+edubuntu-amd64: https://launchpad.net/~ubuntu-cdimage/+livefs/ubuntu/stonking/edubuntu/+build/998227
+edubuntu-amd64 on Launchpad finished at 2026-07-27 01:48:56 (Successfully built)
+===== Downloading live filesystem images =====
+===== Publishing =====
+Submitting images to Test Observer
+500 Server Error: Internal Server Error for url: https://tests-api.ubuntu.com/v1/test-executions/start-test
+Couldn't submit artifact to Test Observer: Expecting value: line 1 column 1 (char 0)
+Traceback (most recent call last):
+  File "/srv/cdimage.ubuntu.com/bin/../lib/cdimage/build.py", line 572, in build_image_set_locked
+    publisher.publish(date)
+  File "/srv/cdimage.ubuntu.com/bin/../lib/cdimage/tree.py", line 177, in path_to_project
+    raise ValueError(
+ValueError: Cannot determine project for path 'nvidia-tegra/...': 'nvidia-tegra' is not a known project directory
+`
+
+// testObserverSubmitFailureNoTracebackLog is the same scenario but without a
+// subsequent traceback — the TO submission failure stands alone. This verifies
+// that detection does not depend on a traceback being present.
+const testObserverSubmitFailureNoTracebackLog = `===== Building live filesystems =====
+edubuntu-amd64 on Launchpad starting at 2026-07-27 00:41:02
+edubuntu-amd64 on Launchpad finished at 2026-07-27 01:48:56 (Successfully built)
+===== Publishing =====
+Submitting images to Test Observer
+500 Server Error: Internal Server Error for url: https://tests-api.ubuntu.com/v1/test-executions/start-test
+Couldn't submit artifact to Test Observer: Expecting value: line 1 column 1 (char 0)
+`
+
 // preinstalledServerLog reflects the real daily-preinstalled log format where labels
 // use "{product}-{arch}-{variant}" rather than bare arch tokens.
 // Artefacts like "stonking-preinstalled-server-amd64.img.xz" (arch="amd64") or
@@ -655,6 +691,11 @@ func TestParseBuildStatusFromLog(t *testing.T) {
 		// run_live_builds traceback that appears AFTER arch's "(Failed to build)" result:
 		// the arch-specific LP verdict takes precedence → FAILED, PRODUCT (not INFRA).
 		{"run_live_builds after failed build, arm64-raspi", runLiveBuildsAfterFailedBuildLog, "arm64-raspi", BuildStatusFailed, BuildFailureKindProduct, "livefs build failure requires analysis"},
+		// Test Observer submission failure (with subsequent traceback): LP built and
+		// published the image but cdimage could not submit it to Test Observer → INFRA.
+		{"TO submit failure + traceback, amd64", testObserverSubmitFailureLog, "amd64", BuildStatusFailed, BuildFailureKindInfra, "LP build succeeded but image could not be submitted to Test Observer"},
+		// Test Observer submission failure without any traceback: same result — INFRA.
+		{"TO submit failure no traceback, amd64", testObserverSubmitFailureNoTracebackLog, "amd64", BuildStatusFailed, BuildFailureKindInfra, "LP build succeeded but image could not be submitted to Test Observer"},
 	}
 
 	for _, tc := range cases {

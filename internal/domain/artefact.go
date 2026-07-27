@@ -660,15 +660,16 @@ func ResolveLogLabel(logPrefix, arch string) string {
 // matches "ubuntu-amd64", "ubuntu-server-live-amd64", etc.).
 //
 // Status detection rules (in evaluation order):
-//   - Empty content or empty arch                                    → NOT_STARTED, kind=none
-//   - No "starting at" line for this arch + run_live_builds traceback → FAILED, INFRA
-//   - No "starting at" line for this arch                            → NOT_STARTED, kind=none
-//   - "starting at" present, no "finished at", any traceback         → FAILED, INFRA  (orphaned)
-//   - "starting at" present, no "finished at", no traceback          → IN_PROGRESS, kind=none
-//   - "finished at" with "(Successfully built)" + any traceback      → FAILED, INFRA  (publish crash)
-//   - "finished at" with "(Successfully built)", no traceback        → BUILT, kind=none
-//   - "finished at" with "(Chroot problem)"                          → FAILED, INFRA  (LP builder)
-//   - "finished at" with any other non-success suffix                → FAILED, PRODUCT
+//   - Empty content or empty arch                                         → NOT_STARTED, kind=none
+//   - No "starting at" line for this arch + run_live_builds traceback     → FAILED, INFRA
+//   - No "starting at" line for this arch                                 → NOT_STARTED, kind=none
+//   - "starting at" present, no "finished at", any traceback              → FAILED, INFRA  (orphaned)
+//   - "starting at" present, no "finished at", no traceback               → IN_PROGRESS, kind=none
+//   - "finished at" with "(Successfully built)" + Test Observer error     → FAILED, INFRA  (TO submit failure)
+//   - "finished at" with "(Successfully built)" + any traceback           → FAILED, INFRA  (publish crash)
+//   - "finished at" with "(Successfully built)", no traceback             → BUILT, kind=none
+//   - "finished at" with "(Chroot problem)"                               → FAILED, INFRA  (LP builder)
+//   - "finished at" with any other non-success suffix                     → FAILED, PRODUCT
 //
 // The arch-specific "finished at" result always takes precedence over a
 // run_live_builds traceback. A run_live_builds traceback that appears after an
@@ -677,12 +678,15 @@ func ResolveLogLabel(logPrefix, arch string) string {
 // infrastructure problem. Only when no "finished at" line exists for this arch
 // does the run_live_builds traceback indicate a true Phase 1 infra failure.
 //
-// Phase 1 infra detection covers three cases:
+// Phase 1 infra detection covers four cases:
 //  1. No "starting at" line AND run_live_builds traceback: cdimage crashed before
 //     submitting builds to Launchpad.
 //  2. "starting at" present, no "finished at", any traceback: cdimage crashed
 //     mid-run (e.g. disk full), orphaning in-flight builds.
-//  3. "finished at (Successfully built)" AND any traceback: LP build succeeded
+//  3. "finished at (Successfully built)" AND Test Observer submission error:
+//     LP build succeeded and image was published but cdimage failed to register
+//     it in Test Observer — artefact is missing from Test Observer despite the build.
+//  4. "finished at (Successfully built)" AND any other traceback: LP build succeeded
 //     but cdimage crashed during publishing — image is unavailable despite the LP result.
 func ParseBuildStatusFromLog(logContent, arch string) (BuildStatusState, BuildFailureKind, string) {
 	if logContent == "" || arch == "" {
@@ -739,7 +743,13 @@ func ParseBuildStatusFromLog(logContent, arch string) (BuildStatusState, BuildFa
 		}
 		return BuildStatusInProgress, BuildFailureKindNone, ""
 	case finishedSuccess:
-		// Phase 1 check C: LP reported success but a traceback is present, meaning
+		// Phase 1 check C: LP reported success but the image did not reach Test Observer.
+		// Check the most specific signal first so the description is actionable.
+		if hasTestObserverSubmitFailure(logContent) {
+			return BuildStatusFailed, BuildFailureKindInfra,
+				"LP build succeeded but image could not be submitted to Test Observer"
+		}
+		// Phase 1 check D: LP reported success but a traceback is present, meaning
 		// cdimage crashed after the LP build completed — typically during publishing.
 		// The image is unavailable despite the LP result; this is an infra failure.
 		if hasAnyTraceback(logContent) {
@@ -794,4 +804,14 @@ func hasRunLiveBuildsTraceback(logContent string) bool {
 // mid-run (e.g. disk full on the cdimage host), orphaning the in-flight builds.
 func hasAnyTraceback(logContent string) bool {
 	return strings.Contains(logContent, "Traceback (most recent call last):")
+}
+
+// hasTestObserverSubmitFailure reports whether the cd-build-log contains the
+// cdimage error line emitted when the Test Observer API call fails after a
+// successful LP build. This indicates that the image was built and published
+// to cdimage but was not registered in Test Observer — the artefact is absent
+// from Test Observer not because the build failed, but because the submission
+// step encountered an error (e.g. Test Observer returned a 5xx response).
+func hasTestObserverSubmitFailure(logContent string) bool {
+	return strings.Contains(logContent, "Couldn't submit artifact to Test Observer")
 }
