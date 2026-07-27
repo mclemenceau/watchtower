@@ -483,55 +483,162 @@ func TestFormatScheduledSummary_AllBuiltToday(t *testing.T) {
 	if !strings.Contains(out, "2/2") {
 		t.Errorf("expected 2/2 built, got:\n%s", out)
 	}
-	// No failing artefacts → no failing line
-	if strings.Contains(out, "failing") {
-		t.Errorf("expected no failing line when all built, got:\n%s", out)
+	// All built → no INFRA / PRODUCT sections.
+	if strings.Contains(out, "INFRA") || strings.Contains(out, "PRODUCT") {
+		t.Errorf("expected no failure sections when all built, got:\n%s", out)
 	}
 }
 
-func TestFormatScheduledSummary_SomeFailing(t *testing.T) {
+func TestFormatScheduledSummary_InfraFailures(t *testing.T) {
 	artefacts := []domain.Artefact{
 		{ID: 1, Name: "noble-desktop-amd64.iso", OS: "ubuntu", Release: "noble", Version: today},
-		{ID: 2, Name: "noble-server-amd64.iso", OS: "ubuntu-server", Release: "noble", Version: yesterday},
-		{ID: 3, Name: "noble-minimal-amd64.iso", OS: "ubuntu-minimal", Release: "noble", Version: yesterday},
+		{
+			ID: 2, Name: "noble-server-amd64.iso", OS: "ubuntu-server", Release: "noble",
+			Version:                 yesterday,
+			BuildLog:                domain.BuildStatusFailed,
+			BuildFailureKind:        domain.BuildFailureKindInfra,
+			BuildFailureDescription: "cdimage crashed mid-run, build was orphaned",
+		},
+		{
+			ID: 3, Name: "noble-server-arm64.iso", OS: "ubuntu-server", Release: "noble",
+			Version:                 yesterday,
+			BuildLog:                domain.BuildStatusFailed,
+			BuildFailureKind:        domain.BuildFailureKindInfra,
+			BuildFailureDescription: "cdimage crashed mid-run, build was orphaned",
+		},
 	}
 	out := FormatScheduledSummary(artefacts, []string{"noble"})
-	// Product names and arch in parentheses
+	if !strings.Contains(out, "❌ INFRA — 2 failing") {
+		t.Errorf("expected INFRA section header, got:\n%s", out)
+	}
+	if !strings.Contains(out, "cdimage crashed mid-run, build was orphaned (2)") {
+		t.Errorf("expected INFRA family description with count, got:\n%s", out)
+	}
+	// ubuntu-server has both amd64 and arm64 failing with same description → one bullet.
 	if !strings.Contains(out, "ubuntu-server") {
-		t.Errorf("expected failing product 'ubuntu-server', got:\n%s", out)
+		t.Errorf("expected ubuntu-server in INFRA group, got:\n%s", out)
 	}
-	if !strings.Contains(out, "ubuntu-minimal") {
-		t.Errorf("expected failing product 'ubuntu-minimal', got:\n%s", out)
-	}
-	if !strings.Contains(out, "(amd64)") {
-		t.Errorf("expected arch '(amd64)' for failing products, got:\n%s", out)
-	}
-	if !strings.Contains(out, "failing:") {
-		t.Errorf("expected 'failing:' line, got:\n%s", out)
-	}
-	// desktop was built today — should NOT appear in failing list
-	if strings.Contains(out, "ubuntu (") {
-		t.Errorf("built-today product should not appear in failing list, got:\n%s", out)
+	// ubuntu was built today → must NOT appear in failures.
+	if strings.Contains(out, "PRODUCT") {
+		t.Errorf("expected no PRODUCT section, got:\n%s", out)
 	}
 }
 
-func TestFormatScheduledSummary_MultipleArchsPerProduct(t *testing.T) {
+func TestFormatScheduledSummary_ProductFailures(t *testing.T) {
 	artefacts := []domain.Artefact{
-		{ID: 1, Name: "noble-desktop-amd64.iso", OS: "ubuntu", Release: "noble", Version: yesterday},
-		{ID: 2, Name: "noble-desktop-arm64.iso", OS: "ubuntu", Release: "noble", Version: yesterday},
-		{ID: 3, Name: "noble-desktop-riscv64.iso", OS: "ubuntu", Release: "noble", Version: today},
+		{
+			ID: 1, Name: "noble-preinstalled-server-arm64+raspi.img.xz", OS: "ubuntu-server",
+			Release:                 "noble",
+			Version:                 yesterday,
+			BuildLog:                domain.BuildStatusFailed,
+			BuildFailureKind:        domain.BuildFailureKindProduct,
+			BuildFailureDescription: "livefs build failure requires analysis",
+		},
+		{
+			ID: 2, Name: "noble-wsl-amd64.wsl", OS: "ubuntu-wsl",
+			Release:                 "noble",
+			Version:                 yesterday,
+			BuildLog:                domain.BuildStatusFailed,
+			BuildFailureKind:        domain.BuildFailureKindProduct,
+			BuildFailureDescription: "livefs build failure requires analysis",
+		},
 	}
 	out := FormatScheduledSummary(artefacts, []string{"noble"})
-	// Both failing archs should appear in parentheses for the same product
-	if !strings.Contains(out, "amd64") {
-		t.Errorf("expected 'amd64' in failing archs, got:\n%s", out)
+	if !strings.Contains(out, "❌ PRODUCT — 2 failing") {
+		t.Errorf("expected PRODUCT section header, got:\n%s", out)
 	}
-	if !strings.Contains(out, "arm64") {
-		t.Errorf("expected 'arm64' in failing archs, got:\n%s", out)
+	if !strings.Contains(out, "livefs build failure requires analysis (2)") {
+		t.Errorf("expected PRODUCT family description with count, got:\n%s", out)
 	}
-	// riscv64 was built today — should not appear
-	if strings.Contains(out, "riscv64") {
-		t.Errorf("built-today arch should not appear in failing list, got:\n%s", out)
+	if !strings.Contains(out, "ubuntu-server") {
+		t.Errorf("expected ubuntu-server in PRODUCT group, got:\n%s", out)
+	}
+	if strings.Contains(out, "INFRA") {
+		t.Errorf("expected no INFRA section, got:\n%s", out)
+	}
+}
+
+func TestFormatScheduledSummary_MixedInfraAndProduct(t *testing.T) {
+	artefacts := []domain.Artefact{
+		{
+			ID: 1, Name: "noble-desktop-amd64.iso", OS: "ubuntu", Release: "noble",
+			Version:                 yesterday,
+			BuildLog:                domain.BuildStatusFailed,
+			BuildFailureKind:        domain.BuildFailureKindInfra,
+			BuildFailureDescription: "cdimage crashed before submitting builds to Launchpad",
+		},
+		{
+			ID: 2, Name: "noble-wsl-amd64.wsl", OS: "ubuntu-wsl", Release: "noble",
+			Version:                 yesterday,
+			BuildLog:                domain.BuildStatusFailed,
+			BuildFailureKind:        domain.BuildFailureKindProduct,
+			BuildFailureDescription: "livefs build failure requires analysis",
+		},
+	}
+	out := FormatScheduledSummary(artefacts, []string{"noble"})
+	if !strings.Contains(out, "❌ INFRA — 1 failing") {
+		t.Errorf("expected INFRA section, got:\n%s", out)
+	}
+	if !strings.Contains(out, "❌ PRODUCT — 1 failing") {
+		t.Errorf("expected PRODUCT section, got:\n%s", out)
+	}
+	// INFRA must appear before PRODUCT in the output.
+	infraPos := strings.Index(out, "INFRA")
+	productPos := strings.Index(out, "PRODUCT")
+	if infraPos > productPos {
+		t.Errorf("expected INFRA section before PRODUCT, got:\n%s", out)
+	}
+}
+
+func TestFormatScheduledSummary_MultipleDescriptions(t *testing.T) {
+	// Two distinct INFRA families should produce two separate sub-groups.
+	artefacts := []domain.Artefact{
+		{
+			ID: 1, Name: "noble-desktop-amd64.iso", OS: "ubuntu", Release: "noble",
+			Version:                 yesterday,
+			BuildLog:                domain.BuildStatusFailed,
+			BuildFailureKind:        domain.BuildFailureKindInfra,
+			BuildFailureDescription: "cdimage crashed before submitting builds to Launchpad",
+		},
+		{
+			ID: 2, Name: "noble-server-amd64.iso", OS: "ubuntu-server", Release: "noble",
+			Version:                 yesterday,
+			BuildLog:                domain.BuildStatusFailed,
+			BuildFailureKind:        domain.BuildFailureKindInfra,
+			BuildFailureDescription: "LP build succeeded but image could not be submitted to Test Observer",
+		},
+	}
+	out := FormatScheduledSummary(artefacts, []string{"noble"})
+	if !strings.Contains(out, "cdimage crashed before submitting builds to Launchpad (1)") {
+		t.Errorf("expected first INFRA family, got:\n%s", out)
+	}
+	if !strings.Contains(out, "LP build succeeded but image could not be submitted to Test Observer (1)") {
+		t.Errorf("expected second INFRA family, got:\n%s", out)
+	}
+}
+
+func TestFormatScheduledSummary_ProductsWithSameArchCollapsed(t *testing.T) {
+	// ubuntu and ubuntu-mate both fail on amd64 with same description → one bullet line.
+	artefacts := []domain.Artefact{
+		{
+			ID: 1, Name: "noble-desktop-amd64.iso", OS: "ubuntu", Release: "noble",
+			Version:                 yesterday,
+			BuildLog:                domain.BuildStatusFailed,
+			BuildFailureKind:        domain.BuildFailureKindInfra,
+			BuildFailureDescription: "LP build succeeded but image could not be submitted to Test Observer",
+		},
+		{
+			ID: 2, Name: "noble-desktop-amd64.iso", OS: "ubuntu-mate", Release: "noble",
+			Version:                 yesterday,
+			BuildLog:                domain.BuildStatusFailed,
+			BuildFailureKind:        domain.BuildFailureKindInfra,
+			BuildFailureDescription: "LP build succeeded but image could not be submitted to Test Observer",
+		},
+	}
+	out := FormatScheduledSummary(artefacts, []string{"noble"})
+	// Both products share amd64 → should appear on one "- ubuntu, ubuntu-mate (amd64)" line.
+	if !strings.Contains(out, "ubuntu, ubuntu-mate (amd64)") {
+		t.Errorf("expected collapsed product line 'ubuntu, ubuntu-mate (amd64)', got:\n%s", out)
 	}
 }
 
@@ -541,9 +648,7 @@ func TestFormatScheduledSummary_ReleaseOrderRespected(t *testing.T) {
 		{ID: 2, Name: "jammy-desktop-amd64.iso", Release: "jammy", Version: today},
 		{ID: 3, Name: "plucky-desktop-amd64.iso", Release: "plucky", Version: today},
 	}
-	// Request: plucky first, then noble — jammy not requested, should be absent.
 	out := FormatScheduledSummary(artefacts, []string{"plucky", "noble"})
-
 	pluckyPos := strings.Index(out, "plucky")
 	noblePos := strings.Index(out, "noble")
 	if pluckyPos < 0 || noblePos < 0 {
@@ -586,8 +691,20 @@ func TestFormatScheduledSummary_UnknownReleaseSkipped(t *testing.T) {
 
 func TestFormatScheduledSummary_ZeroPct(t *testing.T) {
 	artefacts := []domain.Artefact{
-		{ID: 1, Name: "noble-desktop-amd64.iso", OS: "ubuntu", Release: "noble", Version: yesterday},
-		{ID: 2, Name: "noble-server-amd64.iso", OS: "ubuntu-server", Release: "noble", Version: yesterday},
+		{
+			ID: 1, Name: "noble-desktop-amd64.iso", OS: "ubuntu", Release: "noble",
+			Version:                 yesterday,
+			BuildLog:                domain.BuildStatusFailed,
+			BuildFailureKind:        domain.BuildFailureKindInfra,
+			BuildFailureDescription: "cdimage crashed mid-run, build was orphaned",
+		},
+		{
+			ID: 2, Name: "noble-server-amd64.iso", OS: "ubuntu-server", Release: "noble",
+			Version:                 yesterday,
+			BuildLog:                domain.BuildStatusFailed,
+			BuildFailureKind:        domain.BuildFailureKindInfra,
+			BuildFailureDescription: "cdimage crashed mid-run, build was orphaned",
+		},
 	}
 	out := FormatScheduledSummary(artefacts, []string{"noble"})
 	if !strings.Contains(out, "0%") {
@@ -596,11 +713,8 @@ func TestFormatScheduledSummary_ZeroPct(t *testing.T) {
 	if !strings.Contains(out, "0/2") {
 		t.Errorf("expected 0/2 built, got:\n%s", out)
 	}
-	if !strings.Contains(out, "ubuntu (amd64)") {
-		t.Errorf("expected 'ubuntu (amd64)' in failing list, got:\n%s", out)
-	}
-	if !strings.Contains(out, "ubuntu-server (amd64)") {
-		t.Errorf("expected 'ubuntu-server (amd64)' in failing list, got:\n%s", out)
+	if !strings.Contains(out, "❌ INFRA — 2 failing") {
+		t.Errorf("expected INFRA section with count, got:\n%s", out)
 	}
 }
 

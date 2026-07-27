@@ -296,21 +296,39 @@ func FormatTestsStatusRelease(artefacts []domain.Artefact, release, product stri
 	return sb.String()
 }
 
-// FormatScheduledSummary renders the compact scheduled build summary posted to the
-// channel on the configured cron schedule. Each release gets one line showing the
-// build percentage; releases with failing artefacts list them grouped by product
-// with their failing architectures in parentheses.
+// FormatScheduledSummary renders the scheduled build summary posted to the
+// channel on the configured cron schedule.
 //
-//	**stonking — 40% (8/20 built today)**
+// For each release it shows:
+//   - A headline with the built percentage and count.
+//   - INFRA failures grouped by their short description (failure family), each
+//     listing affected products and arches in compact form.
+//   - PRODUCT failures grouped by their description (or LLM hypothesis when
+//     available in a future extension), listing affected products and arches.
+//   - A count of in-progress / not-yet-started artefacts when any exist.
 //
-//	failing:
-//	 - ubuntu-desktop (amd64, arm64)
-//	 - ubuntu-base (riscv64)
+// Example:
+//
+//	**stonking — 0% (0/37 built today)**
+//
+//	❌ INFRA — 30 failing
+//
+//	  LP build succeeded but image could not be submitted to Test Observer (10)
+//	   - ubuntu, ubuntu-mate, kubuntu (amd64)
+//	   - ubuntu-server (amd64, arm64, riscv64)
+//
+//	  cdimage crashed mid-run, build was orphaned (14)
+//	   - ubuntu-base (amd64, arm64, armhf, ppc64el, riscv64)
+//
+//	❌ PRODUCT — 5 failing
+//
+//	  livefs build failure requires analysis (5)
+//	   - ubuntu, edubuntu (arm64)
+//	   - ubuntu-wsl (amd64, arm64)
 //
 // releasesScope controls which releases to include and in which order. When nil or
 // empty, all releases present in artefacts are used (sorted alphabetically).
-// Artefacts are expected to be pre-filtered by the caller (e.g. SummaryForProducts
-// already applied).
+// Artefacts are expected to be pre-filtered by the caller.
 func FormatScheduledSummary(artefacts []domain.Artefact, releasesScope []string) string {
 	if len(artefacts) == 0 {
 		return "No snapshot available yet — the first fetch is still in progress."
@@ -344,42 +362,140 @@ func FormatScheduledSummary(artefacts []domain.Artefact, releasesScope []string)
 
 		total := len(arts)
 		built := 0
-		// product → sorted list of failing arch strings
-		failingArchsByProduct := make(map[string][]string)
-		productOrder := []string{}
+		var infraArts, productArts, otherArts []domain.Artefact
 
 		for _, art := range arts {
-			if effectiveBuildLog(art) == domain.BuildStatusBuilt {
+			switch effectiveBuildLog(art) {
+			case domain.BuildStatusBuilt:
 				built++
-				continue
+			case domain.BuildStatusFailed:
+				switch art.BuildFailureKind {
+				case domain.BuildFailureKindInfra:
+					infraArts = append(infraArts, art)
+				case domain.BuildFailureKindProduct:
+					productArts = append(productArts, art)
+				default:
+					otherArts = append(otherArts, art)
+				}
+			default:
+				otherArts = append(otherArts, art)
 			}
-			arch := archFromName(art.Name)
-			if _, seen := failingArchsByProduct[art.OS]; !seen {
-				productOrder = append(productOrder, art.OS)
-			}
-			failingArchsByProduct[art.OS] = append(failingArchsByProduct[art.OS], arch)
 		}
 
 		pct := 0
 		if total > 0 {
 			pct = built * 100 / total
 		}
-		fmt.Fprintf(&sb, "**%s — %d%% (%d/%d built today)**\n\n", release, pct, built, total)
+		fmt.Fprintf(&sb, "**%s — %d%% (%d/%d built today)**\n", release, pct, built, total)
 
-		if len(productOrder) > 0 {
-			sort.Strings(productOrder)
-			sb.WriteString("failing:\n")
-			for _, product := range productOrder {
-				archs := failingArchsByProduct[product]
-				sort.Strings(archs)
-				fmt.Fprintf(&sb, " - %s (%s)\n", product, strings.Join(archs, ", "))
-			}
+		if len(infraArts) == 0 && len(productArts) == 0 && len(otherArts) == 0 {
 			sb.WriteString("\n")
+			continue
 		}
+
+		if len(infraArts) > 0 {
+			fmt.Fprintf(&sb, "\n❌ INFRA — %d failing\n", len(infraArts))
+			sb.WriteString(formatFailureGroups(infraArts))
+		}
+		if len(productArts) > 0 {
+			fmt.Fprintf(&sb, "\n❌ PRODUCT — %d failing\n", len(productArts))
+			sb.WriteString(formatFailureGroups(productArts))
+		}
+		if len(otherArts) > 0 {
+			inProgress := 0
+			for _, a := range otherArts {
+				if effectiveBuildLog(a) == domain.BuildStatusInProgress {
+					inProgress++
+				}
+			}
+			notBuilt := len(otherArts) - inProgress
+			switch {
+			case inProgress > 0 && notBuilt > 0:
+				fmt.Fprintf(&sb, "\n⏳ %d not yet built · 🔄 %d in progress\n", notBuilt, inProgress)
+			case inProgress > 0:
+				fmt.Fprintf(&sb, "\n🔄 %d in progress\n", inProgress)
+			default:
+				fmt.Fprintf(&sb, "\n⏳ %d not yet built\n", notBuilt)
+			}
+		}
+
+		sb.WriteString("\n")
 	}
 
 	if !any {
 		return "No data available for the configured releases."
+	}
+	return sb.String()
+}
+
+// formatFailureGroups groups a slice of failed artefacts by their
+// BuildFailureDescription, then within each group sub-groups by product (OS)
+// and collapses products that share the same arch set onto one line.
+//
+//	<description> (<total count>)
+//	 - <product1>, <product2> (<arch1>, <arch2>)
+//	 - <product3> (<arch1>)
+func formatFailureGroups(arts []domain.Artefact) string {
+	type entry struct{ product, arch string }
+
+	descOrder := []string{}
+	byDesc := make(map[string][]entry)
+	for _, art := range arts {
+		label := art.BuildFailureDescription
+		if label == "" {
+			label = "(unclassified)"
+		}
+		if _, seen := byDesc[label]; !seen {
+			descOrder = append(descOrder, label)
+		}
+		byDesc[label] = append(byDesc[label], entry{art.OS, archFromName(art.Name)})
+	}
+	sort.Strings(descOrder)
+
+	var sb strings.Builder
+	for _, desc := range descOrder {
+		entries := byDesc[desc]
+		fmt.Fprintf(&sb, "\n  %s (%d)\n", desc, len(entries))
+
+		// Sub-group by product, accumulate arches.
+		productOrder := []string{}
+		archsByProduct := make(map[string][]string)
+		for _, e := range entries {
+			if _, seen := archsByProduct[e.product]; !seen {
+				productOrder = append(productOrder, e.product)
+			}
+			archsByProduct[e.product] = append(archsByProduct[e.product], e.arch)
+		}
+		sort.Strings(productOrder)
+
+		// Collapse products that share an identical sorted arch set onto one line.
+		archKey := func(archs []string) string {
+			cp := append([]string(nil), archs...)
+			sort.Strings(cp)
+			return strings.Join(cp, ",")
+		}
+		keyOrder := []string{}
+		type productGroup struct {
+			products []string
+			archs    []string
+		}
+		byArchKey := make(map[string]*productGroup)
+		for _, prod := range productOrder {
+			archs := archsByProduct[prod]
+			k := archKey(archs)
+			if _, seen := byArchKey[k]; !seen {
+				byArchKey[k] = &productGroup{archs: archs}
+				keyOrder = append(keyOrder, k)
+			}
+			byArchKey[k].products = append(byArchKey[k].products, prod)
+		}
+		for _, k := range keyOrder {
+			g := byArchKey[k]
+			sort.Strings(g.archs)
+			fmt.Fprintf(&sb, "   - %s (%s)\n",
+				strings.Join(g.products, ", "),
+				strings.Join(g.archs, ", "))
+		}
 	}
 	return sb.String()
 }
