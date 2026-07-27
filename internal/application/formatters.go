@@ -496,6 +496,7 @@ func formatFailureGroups(arts []domain.Artefact) string {
 				strings.Join(g.products, ", "),
 				strings.Join(g.archs, ", "))
 		}
+		sb.WriteString("\n")
 	}
 	return sb.String()
 }
