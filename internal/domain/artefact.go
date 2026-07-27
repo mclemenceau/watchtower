@@ -91,18 +91,19 @@ func BuildLogIcon(s BuildStatusState) string {
 // omitted from JSON when empty so existing snapshot files remain compatible.
 // BuildLog is computed from the cd-build-log at fetch time and persisted in the snapshot.
 type Artefact struct {
-	ID               int              `json:"id"`
-	Name             string           `json:"name"`
-	Version          string           `json:"version"` // YYYYMMDD or YYYYMMDD.N (respin); today's date means build succeeded and image is available for testing
-	OS               string           `json:"os"`
-	Release          string           `json:"release"`
-	Stage            string           `json:"stage"`  // pending | current — pipeline release stage, not build state
-	Status           string           `json:"status"` // APPROVED | MARKED_AS_FAILED | UNDECIDED — test review state, unrelated to build availability
-	Archived         bool             `json:"archived"`
-	ImageURL         string           `json:"image_url"`
-	BuildLog         BuildStatusState `json:"build_log,omitempty"`          // enriched build status derived from today's cd-build-log
-	BuildFailureKind BuildFailureKind `json:"build_failure_kind,omitempty"` // failure category when BuildLog==FAILED: INFRA or PRODUCT
-	Builds           []ArtefactBuild  `json:"builds,omitempty"`             // cached from /v1/artefacts/{id}/builds
+	ID                      int              `json:"id"`
+	Name                    string           `json:"name"`
+	Version                 string           `json:"version"` // YYYYMMDD or YYYYMMDD.N (respin); today's date means build succeeded and image is available for testing
+	OS                      string           `json:"os"`
+	Release                 string           `json:"release"`
+	Stage                   string           `json:"stage"`  // pending | current — pipeline release stage, not build state
+	Status                  string           `json:"status"` // APPROVED | MARKED_AS_FAILED | UNDECIDED — test review state, unrelated to build availability
+	Archived                bool             `json:"archived"`
+	ImageURL                string           `json:"image_url"`
+	BuildLog                BuildStatusState `json:"build_log,omitempty"`                 // enriched build status derived from today's cd-build-log
+	BuildFailureKind        BuildFailureKind `json:"build_failure_kind,omitempty"`        // failure category when BuildLog==FAILED: INFRA or PRODUCT
+	BuildFailureDescription string           `json:"build_failure_description,omitempty"` // short human-readable reason for the failure kind
+	Builds                  []ArtefactBuild  `json:"builds,omitempty"`                    // cached from /v1/artefacts/{id}/builds
 }
 
 // ArtefactBuild represents one architecture-specific build of an artefact,
@@ -161,17 +162,19 @@ type LogAnalysis struct {
 // they are marked Resolved when the artefact recovers. This preserves history and
 // enables occurrence weighting across builds.
 type FailureRecord struct {
-	ArtefactID       int          `json:"artefact_id"`
-	ArtefactName     string       `json:"artefact_name"`
-	Release          string       `json:"release"`
-	Product          string       `json:"product"`                    // maps to Artefact.OS
-	FirstSeenVersion string       `json:"first_seen_version"`         // YYYYMMDD of first failure
-	LastSeenVersion  string       `json:"last_seen_version"`          // YYYYMMDD of most recent failure
-	Occurrences      int          `json:"occurrences"`                // increments each new failing version
-	Analysis         *LogAnalysis `json:"analysis,omitempty"`         // nil until FailureAnalysisWorkflow runs
-	AnalysedVersion  string       `json:"analysed_version,omitempty"` // version the analysis was done on
-	AnalysedAt       *time.Time   `json:"analysed_at,omitempty"`
-	Resolved         bool         `json:"resolved"` // true once a recovery is detected
+	ArtefactID         int              `json:"artefact_id"`
+	ArtefactName       string           `json:"artefact_name"`
+	Release            string           `json:"release"`
+	Product            string           `json:"product"`                       // maps to Artefact.OS
+	FirstSeenVersion   string           `json:"first_seen_version"`            // YYYYMMDD of first failure
+	LastSeenVersion    string           `json:"last_seen_version"`             // YYYYMMDD of most recent failure
+	Occurrences        int              `json:"occurrences"`                   // increments each new failing version
+	FailureKind        BuildFailureKind `json:"failure_kind,omitempty"`        // INFRA | PRODUCT — deterministic classification from log parsing
+	FailureDescription string           `json:"failure_description,omitempty"` // short human-readable reason; for PRODUCT failures set to placeholder pending LLM analysis
+	Analysis           *LogAnalysis     `json:"analysis,omitempty"`            // nil until FailureAnalysisWorkflow runs
+	AnalysedVersion    string           `json:"analysed_version,omitempty"`    // version the analysis was done on
+	AnalysedAt         *time.Time       `json:"analysed_at,omitempty"`
+	Resolved           bool             `json:"resolved"` // true once a recovery is detected
 }
 
 // FailureStore is the top-level structure persisted to failures.json.
@@ -196,6 +199,10 @@ func (fs FailureStore) UpsertFailure(art Artefact) bool {
 		if records[i].ArtefactID == art.ID && !records[i].Resolved {
 			records[i].LastSeenVersion = art.Version
 			records[i].Occurrences++
+			// Always refresh the deterministic classification fields — they may
+			// change if the failure kind or description changes across versions.
+			records[i].FailureKind = art.BuildFailureKind
+			records[i].FailureDescription = art.BuildFailureDescription
 			// If the version changed since the last analysis, the old analysis
 			// may no longer be accurate — clear it so re-analysis is triggered.
 			if records[i].Analysis != nil && records[i].AnalysedVersion != art.Version {
@@ -210,13 +217,15 @@ func (fs FailureStore) UpsertFailure(art Artefact) bool {
 
 	// New failure record.
 	fs[art.Release][art.OS] = append(records, FailureRecord{
-		ArtefactID:       art.ID,
-		ArtefactName:     art.Name,
-		Release:          art.Release,
-		Product:          art.OS,
-		FirstSeenVersion: art.Version,
-		LastSeenVersion:  art.Version,
-		Occurrences:      1,
+		ArtefactID:         art.ID,
+		ArtefactName:       art.Name,
+		Release:            art.Release,
+		Product:            art.OS,
+		FirstSeenVersion:   art.Version,
+		LastSeenVersion:    art.Version,
+		Occurrences:        1,
+		FailureKind:        art.BuildFailureKind,
+		FailureDescription: art.BuildFailureDescription,
 	})
 	return true
 }
@@ -638,8 +647,9 @@ func ResolveLogLabel(logPrefix, arch string) string {
 	return arch
 }
 
-// ParseBuildStatusFromLog determines the build status and failure kind for a specific
-// architecture by scanning the content of a cd-build-log.
+// ParseBuildStatusFromLog determines the build status, failure kind, and a short
+// failure description for a specific architecture by scanning the content of a
+// cd-build-log.
 //
 // The function looks for lines of the form:
 //
@@ -649,30 +659,34 @@ func ResolveLogLabel(logPrefix, arch string) string {
 // where {label} is suffix-matched against the normalised arch (e.g. "amd64"
 // matches "ubuntu-amd64", "ubuntu-server-live-amd64", etc.).
 //
-// Status detection rules:
-//   - Empty content or empty arch                      → NOT_STARTED, kind=none
-//   - Phase 1 infra failure (cdimage crash)            → FAILED, kind=INFRA
-//   - No "starting at" line for this arch              → NOT_STARTED, kind=none
-//   - "starting at" present, no "finished at" yet      → IN_PROGRESS, kind=none
-//   - "finished at" with "(Successfully built)"        → BUILT, kind=none
-//   - "finished at" with "(Chroot problem)"            → FAILED, kind=INFRA  (LP builder infra)
-//   - "finished at" with any other non-success suffix  → FAILED, kind=PRODUCT
+// Status detection rules (in evaluation order):
+//   - Empty content or empty arch                                    → NOT_STARTED, kind=none
+//   - No "starting at" line for this arch + run_live_builds traceback → FAILED, INFRA
+//   - No "starting at" line for this arch                            → NOT_STARTED, kind=none
+//   - "starting at" present, no "finished at", any traceback         → FAILED, INFRA  (orphaned)
+//   - "starting at" present, no "finished at", no traceback          → IN_PROGRESS, kind=none
+//   - "finished at" with "(Successfully built)" + any traceback      → FAILED, INFRA  (publish crash)
+//   - "finished at" with "(Successfully built)", no traceback        → BUILT, kind=none
+//   - "finished at" with "(Chroot problem)"                          → FAILED, INFRA  (LP builder)
+//   - "finished at" with any other non-success suffix                → FAILED, PRODUCT
 //
-// Phase 1 infra detection covers two cases:
-//  1. A Python traceback containing "in run_live_builds" (cdimage crashed before
-//     submitting builds to Launchpad — no "starting at" lines appear).
-//  2. Any Python traceback present in the log AND this arch has a "starting at" line
-//     but no "finished at" line (cdimage crashed mid-run, orphaning in-flight builds).
-//     Examples: "OSError: [Errno 28] No space left on device".
-func ParseBuildStatusFromLog(logContent, arch string) (BuildStatusState, BuildFailureKind) {
+// The arch-specific "finished at" result always takes precedence over a
+// run_live_builds traceback. A run_live_builds traceback that appears after an
+// arch's "(Failed to build)" result reflects a subsequent cdimage crash (e.g.
+// LiveBuildsFailed raised because another arch failed), not a pre-submission
+// infrastructure problem. Only when no "finished at" line exists for this arch
+// does the run_live_builds traceback indicate a true Phase 1 infra failure.
+//
+// Phase 1 infra detection covers three cases:
+//  1. No "starting at" line AND run_live_builds traceback: cdimage crashed before
+//     submitting builds to Launchpad.
+//  2. "starting at" present, no "finished at", any traceback: cdimage crashed
+//     mid-run (e.g. disk full), orphaning in-flight builds.
+//  3. "finished at (Successfully built)" AND any traceback: LP build succeeded
+//     but cdimage crashed during publishing — image is unavailable despite the LP result.
+func ParseBuildStatusFromLog(logContent, arch string) (BuildStatusState, BuildFailureKind, string) {
 	if logContent == "" || arch == "" {
-		return BuildStatusNotStarted, BuildFailureKindNone
-	}
-
-	// Phase 1 check A: run_live_builds traceback means cdimage crashed before
-	// posting any builds to Launchpad. Arch-agnostic — all arches are affected.
-	if hasRunLiveBuildsTraceback(logContent) {
-		return BuildStatusFailed, BuildFailureKindInfra
+		return BuildStatusNotStarted, BuildFailureKindNone, ""
 	}
 
 	// Normalise arch for matching: "arm64+raspi" → "arm64-raspi".
@@ -708,27 +722,45 @@ func ParseBuildStatusFromLog(logContent, arch string) (BuildStatusState, BuildFa
 
 	switch {
 	case !started:
-		return BuildStatusNotStarted, BuildFailureKindNone
+		// Phase 1 check A: run_live_builds traceback with no "starting at" line means
+		// cdimage crashed before posting any builds to Launchpad.
+		if hasRunLiveBuildsTraceback(logContent) {
+			return BuildStatusFailed, BuildFailureKindInfra,
+				"cdimage crashed before submitting builds to Launchpad"
+		}
+		return BuildStatusNotStarted, BuildFailureKindNone, ""
 	case !finished:
 		// Phase 1 check B: build started but never finished AND the log contains any
 		// Python traceback — cdimage crashed mid-run (e.g. disk full on the cdimage host).
 		// The arch is treated as an orphaned victim of the infra crash.
 		if hasAnyTraceback(logContent) {
-			return BuildStatusFailed, BuildFailureKindInfra
+			return BuildStatusFailed, BuildFailureKindInfra,
+				"cdimage crashed mid-run, build was orphaned"
 		}
-		return BuildStatusInProgress, BuildFailureKindNone
+		return BuildStatusInProgress, BuildFailureKindNone, ""
 	case finishedSuccess:
+		// Phase 1 check C: LP reported success but a traceback is present, meaning
+		// cdimage crashed after the LP build completed — typically during publishing.
+		// The image is unavailable despite the LP result; this is an infra failure.
+		if hasAnyTraceback(logContent) {
+			return BuildStatusFailed, BuildFailureKindInfra,
+				"LP build succeeded but cdimage crashed during publishing"
+		}
 		// The build finished successfully on Launchpad, but the artefact may not yet be
 		// in Test Observer (publishing can lag). Callers should prefer checking
 		// IsBuiltToday first; this value is returned only for log-only assessment.
-		return BuildStatusBuilt, BuildFailureKindNone
+		return BuildStatusBuilt, BuildFailureKindNone, ""
 	case finishedChroot:
 		// "(Chroot problem)" is reported by Launchpad but reflects an LP builder
 		// infrastructure failure, not a product defect.
-		return BuildStatusFailed, BuildFailureKindInfra
+		return BuildStatusFailed, BuildFailureKindInfra,
+			"Launchpad builder reported a chroot problem"
 	default:
 		// "(Failed to build)" or any other non-success suffix: Phase 2 product failure.
-		return BuildStatusFailed, BuildFailureKindProduct
+		// A run_live_builds traceback may also be present (e.g. LiveBuildsFailed raised
+		// because this arch failed), but the arch-specific LP result takes precedence.
+		return BuildStatusFailed, BuildFailureKindProduct,
+			"livefs build failure requires analysis"
 	}
 }
 

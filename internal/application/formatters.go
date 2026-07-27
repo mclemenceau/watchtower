@@ -585,6 +585,8 @@ func FormatFailuresSummary(records []domain.FailureRecord, release, product stri
 			analysisStr := " _(analysis pending)_"
 			if r.Analysis != nil {
 				analysisStr = fmt.Sprintf(" — %s: %s", r.Analysis.Category, r.Analysis.Hypothesis)
+			} else if r.FailureKind != "" && r.FailureDescription != "" {
+				analysisStr = fmt.Sprintf(" — %s: %s", r.FailureKind, r.FailureDescription)
 			}
 			fmt.Fprintf(&sb, " - **%s**%s%s\n", r.ArtefactName, occStr, analysisStr)
 		}
@@ -600,6 +602,14 @@ func FormatFailureDetail(r domain.FailureRecord) string {
 	fmt.Fprintf(&sb, "**Failure Detail — %s** · %s / %s\n\n", r.ArtefactName, r.Release, r.Product)
 	fmt.Fprintf(&sb, "**First seen:** %s · **Last seen:** %s · **Occurrences:** %d\n",
 		r.FirstSeenVersion, r.LastSeenVersion, r.Occurrences)
+
+	if r.FailureKind != "" {
+		if r.FailureDescription != "" {
+			fmt.Fprintf(&sb, "**Kind:** %s — %s\n", r.FailureKind, r.FailureDescription)
+		} else {
+			fmt.Fprintf(&sb, "**Kind:** %s\n", r.FailureKind)
+		}
+	}
 
 	if r.Analysis == nil {
 		sb.WriteString("\n_Analysis not yet available. Run `analyse failures` to trigger LLM analysis._\n")

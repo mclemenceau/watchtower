@@ -497,8 +497,23 @@ Traceback (most recent call last):
 OSError: [Errno 28] No space left on device
 `
 
-// logWithChrotProblem contains a "finished" line with "(Chroot problem)" —
-// a Launchpad builder infrastructure failure, classified as INFRA not PRODUCT.
+// runLiveBuildsAfterFailedBuildLog reflects a log where the arch finished with
+// "(Failed to build)" on Launchpad, and cdimage then raised LiveBuildsFailed via
+// run_live_builds because the build failed. This pattern is observed for artefacts
+// 23368, 22583, 22582, 23360 in stonking. The arch-specific LP result must take
+// precedence over the subsequent run_live_builds traceback → FAILED, PRODUCT.
+const runLiveBuildsAfterFailedBuildLog = `===== Building live filesystems =====
+Sun Jul 27 01:56:19 UTC 2026
+edubuntu-arm64-raspi on Launchpad starting at 2026-07-27 01:56:19
+edubuntu-arm64-raspi: https://launchpad.net/~ubuntu-cdimage/+livefs/ubuntu/stonking/edubuntu-preinstalled/+build/998247
+edubuntu-arm64-raspi on Launchpad finished at 2026-07-27 02:09:47 (Failed to build)
+Traceback (most recent call last):
+  File "/srv/cdimage.ubuntu.com/bin/../lib/cdimage/build.py", line 530, in build_image_set_locked
+    builds = run_live_builds(config)
+  File "/srv/cdimage.ubuntu.com/bin/../lib/cdimage/livefs.py", line 311, in run_live_builds
+    raise LiveBuildsFailed("No live filesystem builds succeeded.")
+cdimage.livefs.LiveBuildsFailed: No live filesystem builds succeeded.
+`
 
 // preinstalledServerLog reflects the real daily-preinstalled log format where labels
 // use "{product}-{arch}-{variant}" rather than bare arch tokens.
@@ -587,61 +602,66 @@ func TestParseBuildStatusFromLog(t *testing.T) {
 		arch       string
 		wantStatus BuildStatusState
 		wantKind   BuildFailureKind
+		wantDesc   string
 	}{
 		// Empty content → not started, no failure kind.
-		{"empty content", "", "amd64", BuildStatusNotStarted, BuildFailureKindNone},
+		{"empty content", "", "amd64", BuildStatusNotStarted, BuildFailureKindNone, ""},
 		// Empty arch → not started, no failure kind.
-		{"empty arch", typicalServerLog, "", BuildStatusNotStarted, BuildFailureKindNone},
+		{"empty arch", typicalServerLog, "", BuildStatusNotStarted, BuildFailureKindNone, ""},
 		// amd64 successfully built → BUILT, no failure kind.
-		{"amd64 successfully built", typicalServerLog, "amd64", BuildStatusBuilt, BuildFailureKindNone},
+		{"amd64 successfully built", typicalServerLog, "amd64", BuildStatusBuilt, BuildFailureKindNone, ""},
 		// arm64 failed (Failed to build) → FAILED, PRODUCT.
-		{"arm64 failed", typicalServerLog, "arm64", BuildStatusFailed, BuildFailureKindProduct},
+		{"arm64 failed", typicalServerLog, "arm64", BuildStatusFailed, BuildFailureKindProduct, "livefs build failure requires analysis"},
 		// arm64-largemem successfully built.
-		{"arm64-largemem built", typicalServerLog, "arm64-largemem", BuildStatusBuilt, BuildFailureKindNone},
+		{"arm64-largemem built", typicalServerLog, "arm64-largemem", BuildStatusBuilt, BuildFailureKindNone, ""},
 		// riscv64 started but not finished, no traceback → IN_PROGRESS, no failure kind.
-		{"riscv64 in progress", typicalServerLog, "riscv64", BuildStatusInProgress, BuildFailureKindNone},
+		{"riscv64 in progress", typicalServerLog, "riscv64", BuildStatusInProgress, BuildFailureKindNone, ""},
 		// Desktop build in progress (started, no finished line yet, no traceback).
-		{"desktop amd64 in progress", desktopLogInProgress, "amd64", BuildStatusInProgress, BuildFailureKindNone},
-		{"desktop arm64 in progress", desktopLogInProgress, "arm64", BuildStatusInProgress, BuildFailureKindNone},
+		{"desktop amd64 in progress", desktopLogInProgress, "amd64", BuildStatusInProgress, BuildFailureKindNone, ""},
+		{"desktop arm64 in progress", desktopLogInProgress, "arm64", BuildStatusInProgress, BuildFailureKindNone, ""},
 		// Arch not present in log → not started.
-		{"s390x not in log", typicalServerLog, "s390x", BuildStatusNotStarted, BuildFailureKindNone},
+		{"s390x not in log", typicalServerLog, "s390x", BuildStatusNotStarted, BuildFailureKindNone, ""},
 		// Chroot problem suffix → FAILED, INFRA (LP builder problem, not product).
-		{"amd64 chroot problem", logWithChromeProblem, "amd64", BuildStatusFailed, BuildFailureKindInfra},
+		{"amd64 chroot problem", logWithChromeProblem, "amd64", BuildStatusFailed, BuildFailureKindInfra, "Launchpad builder reported a chroot problem"},
 		// arm64+raspi: arm64-raspi matches "ubuntu-server-arm64-raspi" via suffix — FAILED, PRODUCT.
-		{"arm64-raspi failed", preinstalledLog, "arm64-raspi", BuildStatusFailed, BuildFailureKindProduct},
+		{"arm64-raspi failed", preinstalledLog, "arm64-raspi", BuildStatusFailed, BuildFailureKindProduct, "livefs build failure requires analysis"},
 		// Arch with "+" normalised to "-" by caller (ArtefactArch already normalises).
-		{"arm64+largemem normalised", typicalServerLog, "arm64+largemem", BuildStatusBuilt, BuildFailureKindNone},
+		{"arm64+largemem normalised", typicalServerLog, "arm64+largemem", BuildStatusBuilt, BuildFailureKindNone, ""},
 		// Preinstalled server: raw arch "amd64" does NOT match "ubuntu-server-amd64-generic".
 		// After ResolveLogLabel the caller must pass "amd64-generic" instead.
-		{"preinstalled amd64 raw arch no match", preinstalledServerLog, "amd64", BuildStatusNotStarted, BuildFailureKindNone},
+		{"preinstalled amd64 raw arch no match", preinstalledServerLog, "amd64", BuildStatusNotStarted, BuildFailureKindNone, ""},
 		// With the resolved label "amd64-generic" the match succeeds → BUILT.
-		{"preinstalled amd64-generic built", preinstalledServerLog, "amd64-generic", BuildStatusBuilt, BuildFailureKindNone},
+		{"preinstalled amd64-generic built", preinstalledServerLog, "amd64-generic", BuildStatusBuilt, BuildFailureKindNone, ""},
 		// arm64 raw arch does not match "ubuntu-server-arm64-generic" or "ubuntu-server-arm64-raspi".
-		{"preinstalled arm64 raw arch no match", preinstalledServerLog, "arm64", BuildStatusNotStarted, BuildFailureKindNone},
+		{"preinstalled arm64 raw arch no match", preinstalledServerLog, "arm64", BuildStatusNotStarted, BuildFailureKindNone, ""},
 		// With resolved label "arm64-generic" → FAILED, PRODUCT.
-		{"preinstalled arm64-generic failed", preinstalledServerLog, "arm64-generic", BuildStatusFailed, BuildFailureKindProduct},
+		{"preinstalled arm64-generic failed", preinstalledServerLog, "arm64-generic", BuildStatusFailed, BuildFailureKindProduct, "livefs build failure requires analysis"},
 		// riscv64-generic → FAILED, PRODUCT.
-		{"preinstalled riscv64-generic failed", preinstalledServerLog, "riscv64-generic", BuildStatusFailed, BuildFailureKindProduct},
-		// cdimage run_live_builds traceback (LP 400) → FAILED, INFRA for any arch.
-		{"run_live_builds traceback, amd64", cdimageTracebackLog, "amd64", BuildStatusFailed, BuildFailureKindInfra},
-		{"run_live_builds traceback, arm64", cdimageTracebackLog, "arm64", BuildStatusFailed, BuildFailureKindInfra},
-		// Disk-full traceback: amd64 finished successfully before crash → BUILT.
-		{"disk full, amd64 built before crash", diskFullLog, "amd64", BuildStatusBuilt, BuildFailureKindNone},
+		{"preinstalled riscv64-generic failed", preinstalledServerLog, "riscv64-generic", BuildStatusFailed, BuildFailureKindProduct, "livefs build failure requires analysis"},
+		// cdimage run_live_builds traceback (LP 400) — no "starting at" lines for any arch → FAILED, INFRA.
+		{"run_live_builds traceback, amd64", cdimageTracebackLog, "amd64", BuildStatusFailed, BuildFailureKindInfra, "cdimage crashed before submitting builds to Launchpad"},
+		{"run_live_builds traceback, arm64", cdimageTracebackLog, "arm64", BuildStatusFailed, BuildFailureKindInfra, "cdimage crashed before submitting builds to Launchpad"},
+		// Disk-full traceback: amd64 finished "(Successfully built)" but traceback present
+		// → cdimage crashed during publishing → FAILED, INFRA (not BUILT).
+		{"disk full, amd64 built before crash", diskFullLog, "amd64", BuildStatusFailed, BuildFailureKindInfra, "LP build succeeded but cdimage crashed during publishing"},
 		// Disk-full traceback: arm64 started but orphaned → FAILED, INFRA.
-		{"disk full, arm64 orphaned", diskFullLog, "arm64", BuildStatusFailed, BuildFailureKindInfra},
+		{"disk full, arm64 orphaned", diskFullLog, "arm64", BuildStatusFailed, BuildFailureKindInfra, "cdimage crashed mid-run, build was orphaned"},
 		// Disk-full traceback: riscv64 started but orphaned → FAILED, INFRA.
-		{"disk full, riscv64 orphaned", diskFullLog, "riscv64", BuildStatusFailed, BuildFailureKindInfra},
+		{"disk full, riscv64 orphaned", diskFullLog, "riscv64", BuildStatusFailed, BuildFailureKindInfra, "cdimage crashed mid-run, build was orphaned"},
 		// Disk-full traceback: s390x not in log at all → NOT_STARTED (not orphaned).
-		{"disk full, s390x not in log", diskFullLog, "s390x", BuildStatusNotStarted, BuildFailureKindNone},
+		{"disk full, s390x not in log", diskFullLog, "s390x", BuildStatusNotStarted, BuildFailureKindNone, ""},
 		// Traceback from an unrelated script (no arch started, no run_live_builds) → NOT_STARTED.
-		{"unrelated traceback, amd64", unrelatedTracebackLog, "amd64", BuildStatusNotStarted, BuildFailureKindNone},
+		{"unrelated traceback, amd64", unrelatedTracebackLog, "amd64", BuildStatusNotStarted, BuildFailureKindNone, ""},
+		// run_live_builds traceback that appears AFTER arch's "(Failed to build)" result:
+		// the arch-specific LP verdict takes precedence → FAILED, PRODUCT (not INFRA).
+		{"run_live_builds after failed build, arm64-raspi", runLiveBuildsAfterFailedBuildLog, "arm64-raspi", BuildStatusFailed, BuildFailureKindProduct, "livefs build failure requires analysis"},
 	}
 
 	for _, tc := range cases {
-		gotStatus, gotKind := ParseBuildStatusFromLog(tc.content, tc.arch)
-		if gotStatus != tc.wantStatus || gotKind != tc.wantKind {
-			t.Errorf("ParseBuildStatusFromLog(%q, %q) = (%q, %q), want (%q, %q)",
-				tc.desc, tc.arch, gotStatus, gotKind, tc.wantStatus, tc.wantKind)
+		gotStatus, gotKind, gotDesc := ParseBuildStatusFromLog(tc.content, tc.arch)
+		if gotStatus != tc.wantStatus || gotKind != tc.wantKind || gotDesc != tc.wantDesc {
+			t.Errorf("ParseBuildStatusFromLog(%q, %q) = (%q, %q, %q), want (%q, %q, %q)",
+				tc.desc, tc.arch, gotStatus, gotKind, gotDesc, tc.wantStatus, tc.wantKind, tc.wantDesc)
 		}
 	}
 }
@@ -665,5 +685,53 @@ func TestBuildLogIcon(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("BuildLogIcon(%q) = %q, want %q", tc.state, got, tc.want)
 		}
+	}
+}
+
+// --- UpsertFailure: FailureKind and FailureDescription ---
+
+// TestUpsertFailureKindDescription verifies that FailureKind and FailureDescription
+// are stored on both new and updated FailureRecords.
+func TestUpsertFailureKindDescription(t *testing.T) {
+	art := Artefact{
+		ID: 1, Name: "stonking-wsl-amd64.wsl",
+		OS: "ubuntu-wsl", Release: "stonking", Version: "20260727",
+		BuildFailureKind:        BuildFailureKindInfra,
+		BuildFailureDescription: "cdimage crashed before submitting builds to Launchpad",
+	}
+
+	fs := make(FailureStore)
+	isNew := fs.UpsertFailure(art)
+	if !isNew {
+		t.Fatal("expected new record on first upsert")
+	}
+
+	recs := fs.ActiveFailures("stonking", "ubuntu-wsl")
+	if len(recs) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(recs))
+	}
+	if recs[0].FailureKind != BuildFailureKindInfra {
+		t.Errorf("FailureKind = %q, want %q", recs[0].FailureKind, BuildFailureKindInfra)
+	}
+	if recs[0].FailureDescription != art.BuildFailureDescription {
+		t.Errorf("FailureDescription = %q, want %q", recs[0].FailureDescription, art.BuildFailureDescription)
+	}
+
+	// Update the record with a new version and changed kind/description.
+	art2 := art
+	art2.Version = "20260728"
+	art2.BuildFailureKind = BuildFailureKindProduct
+	art2.BuildFailureDescription = "livefs build failure requires analysis"
+	isNew = fs.UpsertFailure(art2)
+	if isNew {
+		t.Fatal("expected existing record on second upsert")
+	}
+
+	recs = fs.ActiveFailures("stonking", "ubuntu-wsl")
+	if recs[0].FailureKind != BuildFailureKindProduct {
+		t.Errorf("updated FailureKind = %q, want %q", recs[0].FailureKind, BuildFailureKindProduct)
+	}
+	if recs[0].FailureDescription != art2.BuildFailureDescription {
+		t.Errorf("updated FailureDescription = %q, want %q", recs[0].FailureDescription, art2.BuildFailureDescription)
 	}
 }
