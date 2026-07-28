@@ -70,9 +70,14 @@ func (a *Activities) FetchTestExecutions(ctx context.Context, artefacts []domain
 // For artefacts already built today (version date == today) the status is set
 // to BuildStatusBuilt without fetching any log.
 // For others the log is fetched; individual fetch failures are non-fatal:
-//   - HTTP 404         → BuildStatusNotStarted (log not yet published)
-//   - Other error      → BuildStatusUnknown
-//   - Fetch succeeded  → ParseBuildStatusFromLog using artefact arch
+//   - HTTP 404 (today)  → fall back to yesterday's log before giving up
+//   - HTTP 404 (both)   → BuildStatusNotStarted (log not yet published)
+//   - Other error       → BuildStatusUnknown
+//   - Fetch succeeded   → ParseBuildStatusFromLog using artefact arch
+//
+// The yesterday fallback handles the common case where today's build has not
+// started yet but yesterday's log contains a meaningful result (e.g. LP built
+// successfully but cdimage crashed before submitting to Test Observer).
 //
 // The enriched slice is returned; the input slice is not modified.
 func (a *Activities) EnrichBuildStatus(ctx context.Context, artefacts []domain.Artefact) ([]domain.Artefact, error) {
@@ -84,7 +89,9 @@ func (a *Activities) EnrichBuildStatus(ctx context.Context, artefacts []domain.A
 		return enriched, nil
 	}
 
-	today := time.Now().UTC().Format("20060102")
+	now := time.Now().UTC()
+	today := now.Format("20060102")
+	yesterday := now.AddDate(0, 0, -1).Format("20060102")
 
 	for i, art := range enriched {
 		// Artefacts with today's serial are already confirmed built.
@@ -100,23 +107,36 @@ func (a *Activities) EnrichBuildStatus(ctx context.Context, artefacts []domain.A
 			continue
 		}
 
+		arch := domain.ArtefactArch(art.Name)
+		logPrefix := domain.LogPrefixFromImageURL(art.ImageURL)
+		label := domain.ResolveLogLabel(logPrefix, arch)
+
 		content, err := a.LogFetcher.Fetch(ctx, logURL)
 		if err != nil {
-			if errors.Is(err, domain.ErrLogNotFound) {
-				enriched[i].BuildLog = domain.BuildStatusNotStarted
-			} else {
+			if !errors.Is(err, domain.ErrLogNotFound) {
 				enriched[i].BuildLog = domain.BuildStatusUnknown
+				continue
 			}
-			continue
+			// Today's log is not published yet — fall back to yesterday's log.
+			// This surfaces meaningful results (e.g. LP succeeded but cdimage
+			// crashed before submitting to Test Observer) rather than reporting
+			// NOT_STARTED when there is actually useful status information.
+			yesterdayURL := domain.LogURLFromImageURLForDate(art.ImageURL, yesterday)
+			content, err = a.LogFetcher.Fetch(ctx, yesterdayURL)
+			if err != nil {
+				if errors.Is(err, domain.ErrLogNotFound) {
+					enriched[i].BuildLog = domain.BuildStatusNotStarted
+				} else {
+					enriched[i].BuildLog = domain.BuildStatusUnknown
+				}
+				continue
+			}
 		}
 
-		arch := domain.ArtefactArch(art.Name)
 		// Resolve the canonical log label for this (logPrefix, arch) pair.
 		// For most artefacts logPrefix is e.g. "daily-live" and the label equals
 		// the arch. For preinstalled builds the log uses "{arch}-{variant}" labels;
 		// ResolveLogLabel returns the appropriate canonical variant (e.g. "amd64-generic").
-		logPrefix := domain.LogPrefixFromImageURL(art.ImageURL)
-		label := domain.ResolveLogLabel(logPrefix, arch)
 		status, failureKind, failureDesc := domain.ParseBuildStatusFromLog(content, label)
 		enriched[i].BuildLog = status
 		enriched[i].BuildFailureKind = failureKind
