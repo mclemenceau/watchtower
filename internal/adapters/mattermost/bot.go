@@ -116,9 +116,6 @@ func (n *ChannelNotifier) post(text, rootID string) (string, error) {
 type ThreadNotifier struct {
 	channel *ChannelNotifier
 	rootID  string
-	// onPost is called with each created post ID so the session can register it
-	// as a known bot thread root. May be nil.
-	onPost func(postID string)
 }
 
 // Compile-time interface check.
@@ -126,14 +123,8 @@ var _ ports.Notifier = (*ThreadNotifier)(nil)
 
 // Send posts text as a reply inside the thread identified by rootID.
 func (t *ThreadNotifier) Send(text string) error {
-	postID, err := t.channel.post(text, t.rootID)
-	if err != nil {
-		return err
-	}
-	if postID != "" && t.onPost != nil {
-		t.onPost(postID)
-	}
-	return nil
+	_, err := t.channel.post(text, t.rootID)
+	return err
 }
 
 // BroadcastNotifier implements ports.Notifier by posting to a configured set of
@@ -371,23 +362,6 @@ func runBotSession(
 	// mu guards conn writes from concurrent dispatch goroutines.
 	var mu sync.Mutex
 
-	// botThreads tracks post IDs the bot has sent during this session.
-	// A thread root ID present here means any reply in that thread should be
-	// answered — no keyword required.
-	var botThreads sync.Map // key: postID (string) → struct{}
-
-	// registerPost adds a post ID (and its root, if it is itself a reply) to
-	// the known-bot-thread set so future replies trigger a response.
-	registerPost := func(postID, rootID string) {
-		if postID != "" {
-			botThreads.Store(postID, struct{}{})
-		}
-		// Also register the root so replies at any depth match.
-		if rootID != "" {
-			botThreads.Store(rootID, struct{}{})
-		}
-	}
-
 	// cancelRead lets us stop the read loop when ctx is done.
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -427,47 +401,30 @@ func runBotSession(
 		}
 
 		// Ignore system messages and our own posts.
-		// When we see one of our own posts, register it so replies to it are tracked.
 		if post.Type != "" {
 			continue
 		}
 		if post.UserID == cfg.BotUserID {
-			registerPost(post.ID, post.RootID)
 			continue
 		}
 
 		lower := strings.ToLower(strings.TrimSpace(post.Message))
 
-		// Determine why (if at all) we should respond.
-		//
-		//  1. Keyword mentioned anywhere in the message — always triggers.
-		//     Mattermost @-mentions can appear mid-sentence: "hello @watchtower help".
-		//  2. Reply inside a thread the bot is part of — triggers without keyword.
-		//     We look up the reply's root ID in botThreads. Mattermost sets
-		//     RootID on every reply; for the first reply to a top-level post,
-		//     RootID equals that post's ID.
-		isKeywordMention := strings.Contains(lower, keyword)
-		_, inBotThread := botThreads.Load(post.RootID)
-		isThreadReply := post.RootID != "" && inBotThread
-
-		if !isKeywordMention && !isThreadReply {
+		// Only respond when the keyword (@watchtower) is explicitly mentioned.
+		// This prevents the bot from triggering on every reply in a thread it
+		// has joined — two people can talk in the same thread without the bot
+		// chiming in unless they deliberately tag it.
+		if !strings.Contains(lower, keyword) {
 			continue
 		}
 
-		// Extract the command text.
-		// Take everything that follows the keyword in the message. This handles
-		// both leading and mid-sentence mentions:
+		// Extract the command text: everything after the keyword.
+		// This handles both leading and mid-sentence mentions:
 		//   "@watchtower help"        → "help"
 		//   "hello @watchtower help"  → "help"
-		//   "help @watchtower"        → "" → "help" (bare mention)
-		// For thread replies with no keyword, use the raw message.
-		var cmd string
-		if isKeywordMention {
-			idx := strings.Index(lower, keyword)
-			cmd = strings.TrimSpace(post.Message[idx+len(keyword):])
-		} else {
-			cmd = post.Message
-		}
+		//   "hello @watchtower"       → "" → "greet" (bare mention)
+		idx := strings.Index(lower, keyword)
+		cmd := strings.TrimSpace(post.Message[idx+len(keyword):])
 		if cmd == "" {
 			cmd = "greet"
 		}
@@ -504,9 +461,6 @@ func runBotSession(
 		notifier = &ThreadNotifier{
 			channel: channelN,
 			rootID:  threadRoot,
-			onPost: func(postID string) {
-				registerPost(postID, threadRoot)
-			},
 		}
 
 		// Session key: channelID+userID for multi-turn LLM clarification.

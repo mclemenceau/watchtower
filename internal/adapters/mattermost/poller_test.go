@@ -115,29 +115,6 @@ func postedEvent(channelID, userID, id, rootID, message string) map[string]inter
 	}
 }
 
-// botPostedEvent simulates the bot's own post arriving on the WebSocket.
-// The bot ignores it for dispatch but registers its ID in botThreads.
-func botPostedEvent(channelID, botUserID, id, rootID string) map[string]interface{} {
-	postJSON, _ := json.Marshal(map[string]interface{}{
-		"id":         id,
-		"channel_id": channelID,
-		"user_id":    botUserID,
-		"message":    "some bot reply",
-		"type":       "",
-		"root_id":    rootID,
-	})
-	return map[string]interface{}{
-		"event": "posted",
-		"data": map[string]interface{}{
-			"post": string(postJSON),
-		},
-		"broadcast": map[string]interface{}{
-			"channel_id": channelID,
-			"user_id":    botUserID,
-		},
-	}
-}
-
 // newTestServer creates a combined HTTP+WebSocket test server.
 // wsEvents is a function that is called once the WS connection is established
 // (after consuming the auth challenge) to deliver events to the bot.
@@ -277,10 +254,11 @@ func TestRunBotMidSentenceAndBareMentions(t *testing.T) {
 	}
 }
 
-// TestRunBotRespondsToThreadReplyWithoutKeyword verifies that the bot replies
-// to a thread follow-up that contains no keyword, as long as the thread was
-// started by the bot itself.
-func TestRunBotRespondsToThreadReplyWithoutKeyword(t *testing.T) {
+// TestRunBotIgnoresThreadReplyWithoutKeyword verifies that the bot does NOT
+// respond to a thread reply that does not contain the keyword. Two users (or
+// one user continuing a conversation) should be able to talk in a thread the
+// bot has replied to without triggering the bot every time.
+func TestRunBotIgnoresThreadReplyWithoutKeyword(t *testing.T) {
 	var (
 		mu         sync.Mutex
 		postedMsgs []string
@@ -288,18 +266,21 @@ func TestRunBotRespondsToThreadReplyWithoutKeyword(t *testing.T) {
 
 	srv := newTestServer(t,
 		func(conn *websocket.Conn) {
-			// Step 1: user sends an @watchtower command.
+			// Step 1: user mentions @watchtower — bot should reply (1 post expected).
 			_ = conn.WriteJSON(postedEvent("ch1", "user42", "post-user-1", "", "@watchtower summary"))
 
-			// Give the bot a moment to process and (in the test server) record the reply.
 			time.Sleep(50 * time.Millisecond)
 
-			// Step 2: simulate the bot's own reply arriving on the WebSocket so
-			// the session registers "bot-reply-1" as a known bot post.
-			_ = conn.WriteJSON(botPostedEvent("ch1", "botuser", "bot-reply-1", "post-user-1"))
+			// Step 2: user (or another user) replies in the thread with no keyword.
+			// Bot must stay silent.
+			_ = conn.WriteJSON(postedEvent("ch1", "user42", "post-user-2", "post-user-1", "sounds good, thanks"))
 
-			// Step 3: user replies in the thread with no keyword at all.
-			_ = conn.WriteJSON(postedEvent("ch1", "user42", "post-user-2", "post-user-1", "can you clarify the noble status?"))
+			time.Sleep(50 * time.Millisecond)
+
+			// Step 3: another bare thread reply — bot must stay silent.
+			_ = conn.WriteJSON(postedEvent("ch1", "user99", "post-user-3", "post-user-1", "agreed"))
+
+			time.Sleep(50 * time.Millisecond)
 		},
 		func(req map[string]string) {
 			mu.Lock()
@@ -310,7 +291,7 @@ func TestRunBotRespondsToThreadReplyWithoutKeyword(t *testing.T) {
 	defer srv.Close()
 
 	snap := state.New(t.TempDir() + "/snap.json")
-	ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
 	mattermostadapter.RunBot(ctx, mattermostadapter.BotConfig{
@@ -325,9 +306,9 @@ func TestRunBotRespondsToThreadReplyWithoutKeyword(t *testing.T) {
 	count := len(postedMsgs)
 	mu.Unlock()
 
-	// Expect at least two replies: one for the initial command, one for the
-	// keyword-free thread follow-up.
-	if count < 2 {
-		t.Fatalf("expected at least 2 bot posts (initial reply + thread follow-up), got %d: %v", count, postedMsgs)
+	// Only the initial @watchtower mention should have produced a reply.
+	// Thread replies without the keyword must be silently ignored.
+	if count != 1 {
+		t.Fatalf("expected exactly 1 bot post (initial mention only), got %d: %v", count, postedMsgs)
 	}
 }
