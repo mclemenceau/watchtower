@@ -324,6 +324,15 @@ func BuildStatus(version string) string {
 	return "❌"
 }
 
+// testObserverWebURL is the base URL of the Test Observer web UI.
+const testObserverWebURL = "https://tests.ubuntu.com"
+
+// TestObserverArtefactURL returns the Test Observer web UI URL for an artefact.
+// Format: https://tests.ubuntu.com/#/images/<id>
+func TestObserverArtefactURL(artefactID int) string {
+	return fmt.Sprintf("%s/#/images/%d", testObserverWebURL, artefactID)
+}
+
 // LogCell returns a Markdown 🔗 hyperlink to today's build log when imageURL is a
 // recognised cdimage.ubuntu.com URL, or ❌ when no log URL can be derived.
 // The URL always uses today's UTC date so that the link reflects the current day's

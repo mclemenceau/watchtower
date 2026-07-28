@@ -570,19 +570,17 @@ func FormatChangeReport(r domain.ChangeReport) string {
 	return sb.String()
 }
 
-// FormatNewBuildsNotification renders a compact one-line-per-artefact notification
-// for use after a data refresh when one or more new successful builds are detected.
-// Each row contains only the essential fields: release, artefact name, and version.
+// FormatNewBuildsNotification renders one line per newly successful build,
+// posting each as a standalone sentence with a link to the Test Observer page.
+// Returns an empty string when the builds slice is empty.
 func FormatNewBuildsNotification(builds []domain.Artefact) string {
 	if len(builds) == 0 {
 		return ""
 	}
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "✅ **New build(s) available** · %s\n\n", time.Now().UTC().Format("2006-01-02 15:04 UTC"))
-	sb.WriteString("| Release | Artefact | Version |\n")
-	sb.WriteString("|---------|----------|---------|\n")
 	for _, a := range builds {
-		fmt.Fprintf(&sb, "| %s | %s | %s |\n", a.Release, a.Name, a.Version)
+		url := domain.TestObserverArtefactURL(a.ID)
+		fmt.Fprintf(&sb, "- New %s build available for %s serial %s [🔗](%s)\n", a.Release, a.Name, a.Version, url)
 	}
 	return sb.String()
 }

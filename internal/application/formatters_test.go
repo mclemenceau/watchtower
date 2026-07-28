@@ -782,19 +782,18 @@ func TestFormatNewBuildsNotification_Empty(t *testing.T) {
 
 func TestFormatNewBuildsNotification_ContainsEssentialFields(t *testing.T) {
 	builds := []domain.Artefact{
-		{ID: 1, Name: "ubuntu-desktop-amd64", OS: "ubuntu", Release: "noble", Version: today, BuildLog: domain.BuildStatusBuilt},
-		{ID: 2, Name: "ubuntu-server-amd64", OS: "ubuntu-server", Release: "noble", Version: today, BuildLog: domain.BuildStatusBuilt},
+		{ID: 42, Name: "ubuntu-desktop-amd64", OS: "ubuntu", Release: "noble", Version: today, BuildLog: domain.BuildStatusBuilt},
 	}
 	out := FormatNewBuildsNotification(builds)
 
-	for _, want := range []string{"✅", "noble", "ubuntu-desktop-amd64", "ubuntu-server-amd64", today, "Release", "Artefact", "Version"} {
+	for _, want := range []string{"noble", "ubuntu-desktop-amd64", today, "🔗", "tests.ubuntu.com/#/images/42"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("FormatNewBuildsNotification missing %q, got:\n%s", want, out)
 		}
 	}
 }
 
-func TestFormatNewBuildsNotification_OneRowPerBuild(t *testing.T) {
+func TestFormatNewBuildsNotification_OneLinePerBuild(t *testing.T) {
 	builds := []domain.Artefact{
 		{ID: 1, Name: "ubuntu-desktop-amd64", OS: "ubuntu", Release: "noble", Version: today},
 		{ID: 2, Name: "ubuntu-server-amd64", OS: "ubuntu-server", Release: "jammy", Version: today},
@@ -802,14 +801,25 @@ func TestFormatNewBuildsNotification_OneRowPerBuild(t *testing.T) {
 	}
 	out := FormatNewBuildsNotification(builds)
 
-	// Count data rows (lines containing a pipe that are not the header or separator).
-	rows := 0
-	for _, line := range strings.Split(out, "\n") {
-		if strings.HasPrefix(line, "|") && !strings.Contains(line, "---") && !strings.Contains(line, "Release") {
-			rows++
+	// Each build should produce exactly one line starting with "- ".
+	lines := 0
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if strings.HasPrefix(line, "- ") {
+			lines++
 		}
 	}
-	if rows != 3 {
-		t.Errorf("expected 3 data rows, got %d in:\n%s", rows, out)
+	if lines != 3 {
+		t.Errorf("expected 3 bullet lines, got %d in:\n%s", lines, out)
+	}
+}
+
+func TestFormatNewBuildsNotification_LineFormat(t *testing.T) {
+	builds := []domain.Artefact{
+		{ID: 7, Name: "noble-server-amd64.iso", Release: "noble", Version: "20260728"},
+	}
+	out := strings.TrimSpace(FormatNewBuildsNotification(builds))
+	want := "- New noble build available for noble-server-amd64.iso serial 20260728 [🔗](https://tests.ubuntu.com/#/images/7)"
+	if out != want {
+		t.Errorf("line format mismatch:\n got:  %s\n want: %s", out, want)
 	}
 }
