@@ -477,14 +477,14 @@ func TestFormatScheduledSummary_AllBuiltToday(t *testing.T) {
 	if !strings.Contains(out, "noble") {
 		t.Errorf("expected release name 'noble', got:\n%s", out)
 	}
-	if !strings.Contains(out, "100%") {
-		t.Errorf("expected 100%%, got:\n%s", out)
-	}
 	if !strings.Contains(out, "2/2") {
 		t.Errorf("expected 2/2 built, got:\n%s", out)
 	}
-	// All built → no INFRA / PRODUCT sections.
-	if strings.Contains(out, "INFRA") || strings.Contains(out, "PRODUCT") {
+	// All built → sunny emoji, no Infra/Product sections.
+	if !strings.Contains(out, "☀️") {
+		t.Errorf("expected sunny emoji for 100%%, got:\n%s", out)
+	}
+	if strings.Contains(out, "Infra") || strings.Contains(out, "Product") {
 		t.Errorf("expected no failure sections when all built, got:\n%s", out)
 	}
 }
@@ -508,19 +508,16 @@ func TestFormatScheduledSummary_InfraFailures(t *testing.T) {
 		},
 	}
 	out := FormatScheduledSummary(artefacts, []string{"noble"})
-	if !strings.Contains(out, "❌ INFRA — 2 failing") {
-		t.Errorf("expected INFRA section header, got:\n%s", out)
+	if !strings.Contains(out, "Infra (2):") {
+		t.Errorf("expected Infra section header, got:\n%s", out)
 	}
-	if !strings.Contains(out, "cdimage crashed mid-run, build was orphaned (2)") {
-		t.Errorf("expected INFRA family description with count, got:\n%s", out)
-	}
-	// ubuntu-server has both amd64 and arm64 failing with same description → one bullet.
+	// ubuntu-server has both amd64 and arm64 failing → should appear in Infra line.
 	if !strings.Contains(out, "ubuntu-server") {
-		t.Errorf("expected ubuntu-server in INFRA group, got:\n%s", out)
+		t.Errorf("expected ubuntu-server in Infra group, got:\n%s", out)
 	}
 	// ubuntu was built today → must NOT appear in failures.
-	if strings.Contains(out, "PRODUCT") {
-		t.Errorf("expected no PRODUCT section, got:\n%s", out)
+	if strings.Contains(out, "Product") {
+		t.Errorf("expected no Product section, got:\n%s", out)
 	}
 }
 
@@ -544,17 +541,14 @@ func TestFormatScheduledSummary_ProductFailures(t *testing.T) {
 		},
 	}
 	out := FormatScheduledSummary(artefacts, []string{"noble"})
-	if !strings.Contains(out, "❌ PRODUCT — 2 failing") {
-		t.Errorf("expected PRODUCT section header, got:\n%s", out)
-	}
-	if !strings.Contains(out, "livefs build failure requires analysis (2)") {
-		t.Errorf("expected PRODUCT family description with count, got:\n%s", out)
+	if !strings.Contains(out, "Product (2):") {
+		t.Errorf("expected Product section header, got:\n%s", out)
 	}
 	if !strings.Contains(out, "ubuntu-server") {
-		t.Errorf("expected ubuntu-server in PRODUCT group, got:\n%s", out)
+		t.Errorf("expected ubuntu-server in Product group, got:\n%s", out)
 	}
-	if strings.Contains(out, "INFRA") {
-		t.Errorf("expected no INFRA section, got:\n%s", out)
+	if strings.Contains(out, "Infra") {
+		t.Errorf("expected no Infra section, got:\n%s", out)
 	}
 }
 
@@ -576,22 +570,22 @@ func TestFormatScheduledSummary_MixedInfraAndProduct(t *testing.T) {
 		},
 	}
 	out := FormatScheduledSummary(artefacts, []string{"noble"})
-	if !strings.Contains(out, "❌ INFRA — 1 failing") {
-		t.Errorf("expected INFRA section, got:\n%s", out)
+	if !strings.Contains(out, "Infra (1):") {
+		t.Errorf("expected Infra section, got:\n%s", out)
 	}
-	if !strings.Contains(out, "❌ PRODUCT — 1 failing") {
-		t.Errorf("expected PRODUCT section, got:\n%s", out)
+	if !strings.Contains(out, "Product (1):") {
+		t.Errorf("expected Product section, got:\n%s", out)
 	}
-	// INFRA must appear before PRODUCT in the output.
-	infraPos := strings.Index(out, "INFRA")
-	productPos := strings.Index(out, "PRODUCT")
+	// Infra must appear before Product in the output.
+	infraPos := strings.Index(out, "Infra")
+	productPos := strings.Index(out, "Product")
 	if infraPos > productPos {
-		t.Errorf("expected INFRA section before PRODUCT, got:\n%s", out)
+		t.Errorf("expected Infra section before Product, got:\n%s", out)
 	}
 }
 
 func TestFormatScheduledSummary_MultipleDescriptions(t *testing.T) {
-	// Two distinct INFRA families should produce two separate sub-groups.
+	// Two INFRA failures with different descriptions → both collapsed into one Infra line.
 	artefacts := []domain.Artefact{
 		{
 			ID: 1, Name: "noble-desktop-amd64.iso", OS: "ubuntu", Release: "noble",
@@ -609,11 +603,15 @@ func TestFormatScheduledSummary_MultipleDescriptions(t *testing.T) {
 		},
 	}
 	out := FormatScheduledSummary(artefacts, []string{"noble"})
-	if !strings.Contains(out, "cdimage crashed before submitting builds to Launchpad (1)") {
-		t.Errorf("expected first INFRA family, got:\n%s", out)
+	if !strings.Contains(out, "Infra (2):") {
+		t.Errorf("expected Infra section with count 2, got:\n%s", out)
 	}
-	if !strings.Contains(out, "LP build succeeded but image could not be submitted to Test Observer (1)") {
-		t.Errorf("expected second INFRA family, got:\n%s", out)
+	// Both products should appear in the single Infra line.
+	if !strings.Contains(out, "ubuntu") {
+		t.Errorf("expected ubuntu in Infra line, got:\n%s", out)
+	}
+	if !strings.Contains(out, "ubuntu-server") {
+		t.Errorf("expected ubuntu-server in Infra line, got:\n%s", out)
 	}
 }
 
@@ -636,9 +634,9 @@ func TestFormatScheduledSummary_ProductsWithSameArchCollapsed(t *testing.T) {
 		},
 	}
 	out := FormatScheduledSummary(artefacts, []string{"noble"})
-	// Both products share amd64 → should appear on one "- ubuntu, ubuntu-mate (amd64)" line.
+	// Both products share amd64 → should be collapsed onto one token "ubuntu, ubuntu-mate (amd64)".
 	if !strings.Contains(out, "ubuntu, ubuntu-mate (amd64)") {
-		t.Errorf("expected collapsed product line 'ubuntu, ubuntu-mate (amd64)', got:\n%s", out)
+		t.Errorf("expected collapsed product token 'ubuntu, ubuntu-mate (amd64)', got:\n%s", out)
 	}
 }
 
@@ -707,14 +705,41 @@ func TestFormatScheduledSummary_ZeroPct(t *testing.T) {
 		},
 	}
 	out := FormatScheduledSummary(artefacts, []string{"noble"})
-	if !strings.Contains(out, "0%") {
-		t.Errorf("expected 0%% when nothing built today, got:\n%s", out)
-	}
 	if !strings.Contains(out, "0/2") {
 		t.Errorf("expected 0/2 built, got:\n%s", out)
 	}
-	if !strings.Contains(out, "❌ INFRA — 2 failing") {
-		t.Errorf("expected INFRA section with count, got:\n%s", out)
+	// 0% → tornado emoji.
+	if !strings.Contains(out, "🌪️") {
+		t.Errorf("expected tornado emoji for 0%%, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Infra (2):") {
+		t.Errorf("expected Infra section with count, got:\n%s", out)
+	}
+}
+
+// --- buildWeatherEmoji ---
+
+func TestBuildWeatherEmoji(t *testing.T) {
+	cases := []struct {
+		built, total int
+		want         string
+	}{
+		{4, 4, "☀️"}, // 100% → sunny
+		{3, 4, "🌤️"}, // 75% → partly cloudy
+		{4, 5, "🌤️"}, // 80% → partly cloudy
+		{2, 4, "⛅"},  // 50% → cloudy
+		{3, 5, "⛅"},  // 60% → cloudy
+		{1, 4, "🌧️"}, // 25% → rainy
+		{2, 5, "🌧️"}, // 40% → rainy (integer div: 2*100/5=40)
+		{1, 5, "⛈️"}, // 20% → stormy
+		{0, 4, "🌪️"}, // 0% → tornado
+		{0, 0, "🌪️"}, // zero total → tornado
+	}
+	for _, tc := range cases {
+		got := buildWeatherEmoji(tc.built, tc.total)
+		if got != tc.want {
+			t.Errorf("buildWeatherEmoji(%d, %d) = %q, want %q", tc.built, tc.total, got, tc.want)
+		}
 	}
 }
 

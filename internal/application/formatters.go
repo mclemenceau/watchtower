@@ -350,7 +350,7 @@ func FormatScheduledSummary(artefacts []domain.Artefact, releasesScope []string)
 	}
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "**Build Summary** · %s\n\n", time.Now().UTC().Format("2006-01-02 15:04 UTC"))
+	fmt.Fprintf(&sb, "### Build Summary · %s\n\n", time.Now().UTC().Format("2006-01-02 15:04 UTC"))
 
 	any := false
 	for _, release := range ordered {
@@ -362,7 +362,7 @@ func FormatScheduledSummary(artefacts []domain.Artefact, releasesScope []string)
 
 		total := len(arts)
 		built := 0
-		var infraArts, productArts, otherArts []domain.Artefact
+		var infraArts, productArts []domain.Artefact
 
 		for _, art := range arts {
 			switch effectiveBuildLog(art) {
@@ -374,49 +374,18 @@ func FormatScheduledSummary(artefacts []domain.Artefact, releasesScope []string)
 					infraArts = append(infraArts, art)
 				case domain.BuildFailureKindProduct:
 					productArts = append(productArts, art)
-				default:
-					otherArts = append(otherArts, art)
 				}
-			default:
-				otherArts = append(otherArts, art)
 			}
 		}
 
-		pct := 0
-		if total > 0 {
-			pct = built * 100 / total
-		}
-		fmt.Fprintf(&sb, "**%s — %d%% (%d/%d built today)**\n", release, pct, built, total)
-
-		if len(infraArts) == 0 && len(productArts) == 0 && len(otherArts) == 0 {
-			sb.WriteString("\n")
-			continue
-		}
+		weather := buildWeatherEmoji(built, total)
+		fmt.Fprintf(&sb, "#### %s (%d/%d) %s\n", release, built, total, weather)
 
 		if len(infraArts) > 0 {
-			fmt.Fprintf(&sb, "\n❌ INFRA — %d failing\n", len(infraArts))
-			sb.WriteString(formatFailureGroups(infraArts))
+			fmt.Fprintf(&sb, "  Infra (%d): %s\n", len(infraArts), formatFailureLine(infraArts))
 		}
 		if len(productArts) > 0 {
-			fmt.Fprintf(&sb, "\n❌ PRODUCT — %d failing\n", len(productArts))
-			sb.WriteString(formatFailureGroups(productArts))
-		}
-		if len(otherArts) > 0 {
-			inProgress := 0
-			for _, a := range otherArts {
-				if effectiveBuildLog(a) == domain.BuildStatusInProgress {
-					inProgress++
-				}
-			}
-			notBuilt := len(otherArts) - inProgress
-			switch {
-			case inProgress > 0 && notBuilt > 0:
-				fmt.Fprintf(&sb, "\n⏳ %d not yet built · 🔄 %d in progress\n", notBuilt, inProgress)
-			case inProgress > 0:
-				fmt.Fprintf(&sb, "\n🔄 %d in progress\n", inProgress)
-			default:
-				fmt.Fprintf(&sb, "\n⏳ %d not yet built\n", notBuilt)
-			}
+			fmt.Fprintf(&sb, "  Product (%d): %s\n", len(productArts), formatFailureLine(productArts))
 		}
 
 		sb.WriteString("\n")
@@ -428,77 +397,84 @@ func FormatScheduledSummary(artefacts []domain.Artefact, releasesScope []string)
 	return sb.String()
 }
 
-// formatFailureGroups groups a slice of failed artefacts by their
-// BuildFailureDescription, then within each group sub-groups by product (OS)
-// and collapses products that share the same arch set onto one line.
+// buildWeatherEmoji returns a Jenkins-style weather emoji based on the
+// percentage of artefacts built today out of the total for a release.
 //
-//	<description> (<total count>)
-//	 - <product1>, <product2> (<arch1>, <arch2>)
-//	 - <product3> (<arch1>)
-func formatFailureGroups(arts []domain.Artefact) string {
-	type entry struct{ product, arch string }
+//	100%      → ☀️  sunny
+//	75–99%    → 🌤️  partly cloudy
+//	50–74%    → ⛅  cloudy
+//	25–49%    → 🌧️  rainy
+//	1–24%     → ⛈️  stormy
+//	0% (or 0) → 🌪️  tornado
+func buildWeatherEmoji(built, total int) string {
+	if total == 0 {
+		return "🌪️"
+	}
+	pct := built * 100 / total
+	switch {
+	case pct == 100:
+		return "☀️"
+	case pct >= 75:
+		return "🌤️"
+	case pct >= 50:
+		return "⛅"
+	case pct >= 25:
+		return "🌧️"
+	case pct > 0:
+		return "⛈️"
+	default:
+		return "🌪️"
+	}
+}
 
-	descOrder := []string{}
-	byDesc := make(map[string][]entry)
+// formatFailureLine renders a compact one-liner for a failure bucket.
+// Products are grouped by their sorted arch set; groups sharing the same
+// arch set are collapsed onto one token:
+//
+//	ubuntu, ubuntu-mate (amd64) · ubuntu-server (amd64, arm64)
+func formatFailureLine(arts []domain.Artefact) string {
+	// Sub-group by product, accumulate arches.
+	productOrder := []string{}
+	archsByProduct := make(map[string][]string)
 	for _, art := range arts {
-		label := art.BuildFailureDescription
-		if label == "" {
-			label = "(unclassified)"
+		if _, seen := archsByProduct[art.OS]; !seen {
+			productOrder = append(productOrder, art.OS)
 		}
-		if _, seen := byDesc[label]; !seen {
-			descOrder = append(descOrder, label)
-		}
-		byDesc[label] = append(byDesc[label], entry{art.OS, archFromName(art.Name)})
+		archsByProduct[art.OS] = append(archsByProduct[art.OS], archFromName(art.Name))
 	}
-	sort.Strings(descOrder)
+	sort.Strings(productOrder)
 
-	var sb strings.Builder
-	for _, desc := range descOrder {
-		entries := byDesc[desc]
-		fmt.Fprintf(&sb, "\n  %s (%d)\n", desc, len(entries))
-
-		// Sub-group by product, accumulate arches.
-		productOrder := []string{}
-		archsByProduct := make(map[string][]string)
-		for _, e := range entries {
-			if _, seen := archsByProduct[e.product]; !seen {
-				productOrder = append(productOrder, e.product)
-			}
-			archsByProduct[e.product] = append(archsByProduct[e.product], e.arch)
-		}
-		sort.Strings(productOrder)
-
-		// Collapse products that share an identical sorted arch set onto one line.
-		archKey := func(archs []string) string {
-			cp := append([]string(nil), archs...)
-			sort.Strings(cp)
-			return strings.Join(cp, ",")
-		}
-		keyOrder := []string{}
-		type productGroup struct {
-			products []string
-			archs    []string
-		}
-		byArchKey := make(map[string]*productGroup)
-		for _, prod := range productOrder {
-			archs := archsByProduct[prod]
-			k := archKey(archs)
-			if _, seen := byArchKey[k]; !seen {
-				byArchKey[k] = &productGroup{archs: archs}
-				keyOrder = append(keyOrder, k)
-			}
-			byArchKey[k].products = append(byArchKey[k].products, prod)
-		}
-		for _, k := range keyOrder {
-			g := byArchKey[k]
-			sort.Strings(g.archs)
-			fmt.Fprintf(&sb, "   - %s (%s)\n",
-				strings.Join(g.products, ", "),
-				strings.Join(g.archs, ", "))
-		}
-		sb.WriteString("\n")
+	// Collapse products that share an identical sorted arch set onto one token.
+	archKey := func(archs []string) string {
+		cp := append([]string(nil), archs...)
+		sort.Strings(cp)
+		return strings.Join(cp, ",")
 	}
-	return sb.String()
+	type productGroup struct {
+		products []string
+		archs    []string
+	}
+	keyOrder := []string{}
+	byArchKey := make(map[string]*productGroup)
+	for _, prod := range productOrder {
+		archs := archsByProduct[prod]
+		k := archKey(archs)
+		if _, seen := byArchKey[k]; !seen {
+			byArchKey[k] = &productGroup{archs: archs}
+			keyOrder = append(keyOrder, k)
+		}
+		byArchKey[k].products = append(byArchKey[k].products, prod)
+	}
+
+	tokens := make([]string, 0, len(keyOrder))
+	for _, k := range keyOrder {
+		g := byArchKey[k]
+		sort.Strings(g.archs)
+		tokens = append(tokens, fmt.Sprintf("%s (%s)",
+			strings.Join(g.products, ", "),
+			strings.Join(g.archs, ", ")))
+	}
+	return strings.Join(tokens, " · ")
 }
 
 // archFromName extracts the CPU architecture token from an artefact name.
