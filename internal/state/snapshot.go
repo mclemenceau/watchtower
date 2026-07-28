@@ -54,6 +54,10 @@ func (s *Snapshot) Write(artefacts []domain.Artefact) error {
 // Diff compares an old snapshot against a fresh fetch and categorises every change.
 // Status vocabulary: APPROVED | MARKED_AS_FAILED | UNDECIDED
 // MARKED_AS_FAILED is treated as the failure state for alerting purposes.
+//
+// NewBuilds is populated when a known artefact's version serial advances and its
+// BuildLog is BUILT — confirming a new successful image is available. Artefacts
+// with no prior version (first boot / NewArtefacts) are excluded to avoid bulk noise.
 func Diff(old, fresh []domain.Artefact) domain.ChangeReport {
 	oldByID := make(map[int]domain.Artefact, len(old))
 	for _, a := range old {
@@ -68,6 +72,12 @@ func Diff(old, fresh []domain.Artefact) domain.ChangeReport {
 			report.NewArtefacts = append(report.NewArtefacts, a)
 			continue
 		}
+
+		// Detect a new successful build: version advanced and build log confirms BUILT.
+		if a.Version != prev.Version && prev.Version != "" && a.BuildLog == domain.BuildStatusBuilt {
+			report.NewBuilds = append(report.NewBuilds, a)
+		}
+
 		if prev.Status == a.Status {
 			continue
 		}

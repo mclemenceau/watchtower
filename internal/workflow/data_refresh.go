@@ -11,12 +11,9 @@ import (
 )
 
 // DataRefreshWorkflow fetches a fresh artefact + test-execution snapshot from
-// Test Observer, persists it, and updates the failure store with any new
-// failures or recoveries detected in the diff.
-//
-// It never sends any notification — its sole purpose is to keep the local
-// snapshot and failure store up to date so that bot commands and the summary
-// workflow always read recent data.
+// Test Observer, persists it, updates the failure store with any new failures
+// or recoveries detected in the diff, and posts a compact notification when
+// one or more artefacts have a new successful build since the previous snapshot.
 //
 // Intended to run on a frequent cron schedule (e.g. every 30 min via
 // REFRESH_CRON_SCHEDULE).
@@ -78,6 +75,17 @@ func DataRefreshWorkflow(ctx sdk.Context) error {
 		if err := sdk.ExecuteActivity(ctx, act.UpdateFailureRecords, report, enriched).Get(ctx, nil); err != nil {
 			// Non-fatal: failure store update failing should not abort the refresh.
 			sdk.GetLogger(ctx).Warn("UpdateFailureRecords failed", "error", err)
+		}
+	}
+
+	// 6. Notify the broadcast channel about any newly completed builds.
+	//    Non-fatal: a notification failure should not fail the data refresh.
+	if len(report.NewBuilds) > 0 {
+		notifyCtx := sdk.WithActivityOptions(ctx, sdk.ActivityOptions{
+			StartToCloseTimeout: 30 * time.Second,
+		})
+		if err := sdk.ExecuteActivity(notifyCtx, act.NotifyNewBuilds, report).Get(notifyCtx, nil); err != nil {
+			sdk.GetLogger(ctx).Warn("NotifyNewBuilds failed", "error", err)
 		}
 	}
 

@@ -766,3 +766,50 @@ func TestArchFromName(t *testing.T) {
 		}
 	}
 }
+
+// --- FormatNewBuildsNotification ---
+
+func TestFormatNewBuildsNotification_Empty(t *testing.T) {
+	out := FormatNewBuildsNotification(nil)
+	if out != "" {
+		t.Errorf("expected empty string for nil input, got: %s", out)
+	}
+	out = FormatNewBuildsNotification([]domain.Artefact{})
+	if out != "" {
+		t.Errorf("expected empty string for empty input, got: %s", out)
+	}
+}
+
+func TestFormatNewBuildsNotification_ContainsEssentialFields(t *testing.T) {
+	builds := []domain.Artefact{
+		{ID: 1, Name: "ubuntu-desktop-amd64", OS: "ubuntu", Release: "noble", Version: today, BuildLog: domain.BuildStatusBuilt},
+		{ID: 2, Name: "ubuntu-server-amd64", OS: "ubuntu-server", Release: "noble", Version: today, BuildLog: domain.BuildStatusBuilt},
+	}
+	out := FormatNewBuildsNotification(builds)
+
+	for _, want := range []string{"✅", "noble", "ubuntu-desktop-amd64", "ubuntu-server-amd64", today, "Release", "Artefact", "Version"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("FormatNewBuildsNotification missing %q, got:\n%s", want, out)
+		}
+	}
+}
+
+func TestFormatNewBuildsNotification_OneRowPerBuild(t *testing.T) {
+	builds := []domain.Artefact{
+		{ID: 1, Name: "ubuntu-desktop-amd64", OS: "ubuntu", Release: "noble", Version: today},
+		{ID: 2, Name: "ubuntu-server-amd64", OS: "ubuntu-server", Release: "jammy", Version: today},
+		{ID: 3, Name: "ubuntu-mini", OS: "ubuntu", Release: "plucky", Version: today},
+	}
+	out := FormatNewBuildsNotification(builds)
+
+	// Count data rows (lines containing a pipe that are not the header or separator).
+	rows := 0
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "|") && !strings.Contains(line, "---") && !strings.Contains(line, "Release") {
+			rows++
+		}
+	}
+	if rows != 3 {
+		t.Errorf("expected 3 data rows, got %d in:\n%s", rows, out)
+	}
+}

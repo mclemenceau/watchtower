@@ -138,6 +138,10 @@ type ChangeReport struct {
 	Recoveries   []ArtefactDelta `json:"recoveries"`
 	OtherChanges []ArtefactDelta `json:"other_changes"`
 	NewArtefacts []Artefact      `json:"new_artefacts"`
+	// NewBuilds contains artefacts whose version serial advanced since the last
+	// snapshot and whose BuildLog is now BUILT, confirming a successful build.
+	// First-boot artefacts (no prior version) are excluded to avoid bulk noise.
+	NewBuilds []Artefact `json:"new_builds,omitempty"`
 }
 
 // ArtefactDelta represents one artefact's status transition between snapshots.

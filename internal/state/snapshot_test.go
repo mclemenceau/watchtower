@@ -180,3 +180,56 @@ func TestLatestReleaseEmpty(t *testing.T) {
 		t.Fatalf("expected empty string, got %s", got)
 	}
 }
+
+// --- Diff: NewBuilds ---
+
+func TestDiffNewBuild_VersionAdvancedAndBuilt(t *testing.T) {
+	old := []domain.Artefact{{ID: 1, Name: "noble-desktop-amd64.iso", Release: "noble", Version: "20260401", BuildLog: domain.BuildStatusBuilt}}
+	fresh := []domain.Artefact{{ID: 1, Name: "noble-desktop-amd64.iso", Release: "noble", Version: "20260402", BuildLog: domain.BuildStatusBuilt}}
+
+	report := Diff(old, fresh)
+
+	if len(report.NewBuilds) != 1 {
+		t.Fatalf("expected 1 new build, got %d", len(report.NewBuilds))
+	}
+	if report.NewBuilds[0].Version != "20260402" {
+		t.Fatalf("wrong version: %s", report.NewBuilds[0].Version)
+	}
+}
+
+func TestDiffNewBuild_VersionAdvancedButNotBuilt(t *testing.T) {
+	// Version changed but BuildLog is FAILED — should not appear in NewBuilds.
+	old := []domain.Artefact{{ID: 1, Name: "noble-desktop-amd64.iso", Release: "noble", Version: "20260401", BuildLog: domain.BuildStatusBuilt}}
+	fresh := []domain.Artefact{{ID: 1, Name: "noble-desktop-amd64.iso", Release: "noble", Version: "20260402", BuildLog: domain.BuildStatusFailed}}
+
+	report := Diff(old, fresh)
+
+	if len(report.NewBuilds) != 0 {
+		t.Fatalf("expected 0 new builds for FAILED status, got %d", len(report.NewBuilds))
+	}
+}
+
+func TestDiffNewBuild_FirstBootExcluded(t *testing.T) {
+	// No old snapshot (first boot) — artefact lands in NewArtefacts, not NewBuilds.
+	var old []domain.Artefact
+	fresh := []domain.Artefact{{ID: 1, Name: "noble-desktop-amd64.iso", Release: "noble", Version: "20260402", BuildLog: domain.BuildStatusBuilt}}
+
+	report := Diff(old, fresh)
+
+	if len(report.NewBuilds) != 0 {
+		t.Fatalf("expected 0 new builds on first boot, got %d", len(report.NewBuilds))
+	}
+	if len(report.NewArtefacts) != 1 {
+		t.Fatalf("expected 1 new artefact on first boot, got %d", len(report.NewArtefacts))
+	}
+}
+
+func TestDiffNewBuild_SameVersionNotReported(t *testing.T) {
+	// Same version and BUILT — no new build notification.
+	artefact := domain.Artefact{ID: 1, Name: "noble-desktop-amd64.iso", Release: "noble", Version: "20260402", BuildLog: domain.BuildStatusBuilt}
+	report := Diff([]domain.Artefact{artefact}, []domain.Artefact{artefact})
+
+	if len(report.NewBuilds) != 0 {
+		t.Fatalf("expected 0 new builds when version unchanged, got %d", len(report.NewBuilds))
+	}
+}

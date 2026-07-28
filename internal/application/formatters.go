@@ -570,6 +570,23 @@ func FormatChangeReport(r domain.ChangeReport) string {
 	return sb.String()
 }
 
+// FormatNewBuildsNotification renders a compact one-line-per-artefact notification
+// for use after a data refresh when one or more new successful builds are detected.
+// Each row contains only the essential fields: release, artefact name, and version.
+func FormatNewBuildsNotification(builds []domain.Artefact) string {
+	if len(builds) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "✅ **New build(s) available** · %s\n\n", time.Now().UTC().Format("2006-01-02 15:04 UTC"))
+	sb.WriteString("| Release | Artefact | Version |\n")
+	sb.WriteString("|---------|----------|---------|\n")
+	for _, a := range builds {
+		fmt.Fprintf(&sb, "| %s | %s | %s |\n", a.Release, a.Name, a.Version)
+	}
+	return sb.String()
+}
+
 // FormatInvestigation renders the LLM log analysis result for a single artefact.
 // source is a human-readable description of which log was analysed
 // (e.g. "Launchpad librarian (amd64)" or "cd-build-log").

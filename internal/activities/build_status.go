@@ -235,6 +235,17 @@ func (a *Activities) PostSummary(ctx context.Context) error {
 	return a.NotifyChannel(ctx, msg)
 }
 
+// NotifyNewBuilds posts a compact notification listing every artefact whose build
+// completed successfully since the previous snapshot. It is a no-op when the report
+// contains no new builds, so callers do not need to guard the call.
+func (a *Activities) NotifyNewBuilds(ctx context.Context, report domain.ChangeReport) error {
+	if len(report.NewBuilds) == 0 {
+		return nil
+	}
+	msg := application.FormatNewBuildsNotification(report.NewBuilds)
+	return a.NotifyChannel(ctx, msg)
+}
+
 // containsSummaryProduct reports whether product (case-insensitive) is present in the list.
 func containsSummaryProduct(list []string, product string) bool {
 	for _, p := range list {
