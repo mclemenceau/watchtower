@@ -21,8 +21,9 @@ type Config struct {
 	MattermostBotUserID string // user ID of the bot account (used to suppress self-echoes)
 
 	// Bot behaviour
-	WatchtowerKeyword        string        // trigger keyword (default @watchtower)
-	MattermostReconnectDelay time.Duration // WebSocket reconnect delay (default 5s)
+	WatchtowerKeyword           string        // trigger keyword (default @watchtower)
+	MattermostReconnectDelay    time.Duration // WebSocket reconnect delay (default 5s)
+	MattermostBroadcastChannels []string      // channel IDs to post proactive summaries to; empty = all joined channels
 
 	// LLM-assisted intent resolution (optional — feature is disabled when OpenRouterAPIKey is empty)
 	OpenRouterAPIKey string
@@ -60,6 +61,7 @@ func Load() (*Config, error) {
 		MattermostBotUserID:         os.Getenv("MATTERMOST_BOT_USER_ID"),
 		WatchtowerKeyword:           envOrDefault("WATCHTOWER_KEYWORD", "@watchtower"),
 		MattermostReconnectDelay:    reconnectDelay,
+		MattermostBroadcastChannels: parseSummaryList(os.Getenv("MATTERMOST_BROADCAST_CHANNEL_IDS")),
 		OpenRouterAPIKey:            os.Getenv("OPENROUTER_API_KEY"),
 		LLMModel:                    envOrDefault("LLM_MODEL", "openai/gpt-4o-mini"),
 		RefreshCronSchedule:         envOrDefault("REFRESH_CRON_SCHEDULE", "*/30 * * * *"),

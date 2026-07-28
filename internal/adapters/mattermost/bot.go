@@ -136,35 +136,49 @@ func (t *ThreadNotifier) Send(text string) error {
 	return nil
 }
 
-// BroadcastNotifier implements ports.Notifier by posting to every channel the
-// bot has joined. It fetches the channel list fresh on each Send so new
-// invitations are picked up without a restart.
+// BroadcastNotifier implements ports.Notifier by posting to a configured set of
+// channels. When allowedChannels is non-empty only those channel IDs receive the
+// post. When it is empty the notifier falls back to fetching all channels the bot
+// has joined (excluding DM/group channels) and posts to every one of them.
 type BroadcastNotifier struct {
-	serverURL  string
-	token      string
-	botUserID  string
-	httpClient *http.Client
+	serverURL       string
+	token           string
+	botUserID       string
+	allowedChannels []string // nil/empty = broadcast to all joined channels
+	httpClient      *http.Client
 }
 
 // Compile-time interface check.
 var _ ports.Notifier = (*BroadcastNotifier)(nil)
 
 // NewBroadcastNotifier creates a BroadcastNotifier.
-func NewBroadcastNotifier(serverURL, token, botUserID string) *BroadcastNotifier {
+// allowedChannels restricts proactive posts to those channel IDs only.
+// Pass nil or an empty slice to post to every channel the bot has joined.
+func NewBroadcastNotifier(serverURL, token, botUserID string, allowedChannels []string) *BroadcastNotifier {
 	return &BroadcastNotifier{
-		serverURL:  strings.TrimRight(serverURL, "/"),
-		token:      token,
-		botUserID:  botUserID,
-		httpClient: &http.Client{Timeout: 10 * time.Second},
+		serverURL:       strings.TrimRight(serverURL, "/"),
+		token:           token,
+		botUserID:       botUserID,
+		allowedChannels: allowedChannels,
+		httpClient:      &http.Client{Timeout: 10 * time.Second},
 	}
 }
 
-// Send posts text to all channels the bot is currently a member of.
-// Errors from individual channels are logged but do not abort the broadcast.
+// Send posts text to the target channels.
+// When an allowlist was provided at construction time only those channels
+// receive the message. Otherwise all channels the bot has joined (excluding
+// DM and group channels) are targeted. Errors from individual channels are
+// logged but do not abort the broadcast.
 func (b *BroadcastNotifier) Send(text string) error {
-	channels, err := b.fetchJoinedChannels()
-	if err != nil {
-		return fmt.Errorf("BroadcastNotifier: fetch channels: %w", err)
+	var channels []string
+	if len(b.allowedChannels) > 0 {
+		channels = b.allowedChannels
+	} else {
+		var err error
+		channels, err = b.fetchJoinedChannels()
+		if err != nil {
+			return fmt.Errorf("BroadcastNotifier: fetch channels: %w", err)
+		}
 	}
 	for _, ch := range channels {
 		n := NewChannelNotifier(b.serverURL, b.token, ch)

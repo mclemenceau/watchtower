@@ -50,6 +50,7 @@ func main() {
 			cfg.MattermostServerURL,
 			cfg.MattermostBotToken,
 			cfg.MattermostBotUserID,
+			cfg.MattermostBroadcastChannels,
 		)
 		log.Printf("mattermost bot: broadcast notifier active (%s)", cfg.MattermostServerURL)
 	} else {
