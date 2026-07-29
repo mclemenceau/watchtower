@@ -15,10 +15,11 @@ import (
 // or recoveries detected in the diff, and posts a compact notification when
 // one or more artefacts have a new successful build since the previous snapshot.
 //
-// When new PRODUCT or UNKNOWN build failures are detected, AnalyseFailures is
-// run inline immediately after UpdateFailureRecords so that the LLM analysis
-// (or deterministic signature extraction) happens as soon as the failure is
-// recorded — rather than waiting for the next scheduled analysis cron window.
+// When new PRODUCT or UNKNOWN build failures are detected (including first-boot
+// seeding via NewArtefacts), AnalyseFailures is run inline immediately after
+// UpdateFailureRecords so that the LLM analysis (or deterministic signature
+// extraction) happens as soon as the failure is recorded — rather than waiting
+// for the next scheduled analysis cron window.
 //
 // Intended to run on a frequent cron schedule (e.g. every 30 min via
 // REFRESH_CRON_SCHEDULE).
@@ -109,26 +110,53 @@ func DataRefreshWorkflow(ctx sdk.Context) error {
 	return nil
 }
 
-// hasNewProductFailures reports whether any delta in report.NewFailures
-// corresponds to an artefact with a PRODUCT or UNKNOWN BuildFailureKind —
-// i.e. failures that benefit from log analysis (INFRA failures already have
-// a deterministic description).
+// hasNewProductFailures reports whether any newly recorded failure needs LLM
+// or signature analysis. INFRA failures are excluded because they already carry
+// a deterministic description from cd-build-log parsing.
+//
+// Two sources are checked:
+//  1. report.NewFailures — artefacts that transitioned to FAILED since the last
+//     snapshot (steady-state path).
+//  2. report.NewArtefacts — artefacts with no prior snapshot entry whose
+//     BuildLog is already FAILED (first-boot seeding path). Without this check
+//     the first-boot run seeds failures via UpdateFailureRecords but never
+//     triggers AnalyseFailures, leaving all PRODUCT records without a
+//     description until the next FAILURE_ANALYSIS_CRON_SCHEDULE fires.
 func hasNewProductFailures(report domain.ChangeReport, artefacts []domain.Artefact) bool {
+	needsAnalysis := func(kind domain.BuildFailureKind) bool {
+		switch kind {
+		case domain.BuildFailureKindProduct,
+			domain.BuildFailureKindUnknown,
+			domain.BuildFailureKindNone:
+			// PRODUCT and UNKNOWN need analysis; None means the kind hasn't been
+			// determined yet — include it to be safe.
+			return true
+		}
+		return false
+	}
+
 	byID := make(map[int]domain.Artefact, len(artefacts))
 	for _, a := range artefacts {
 		byID[a.ID] = a
 	}
+
+	// Steady-state: artefacts that newly transitioned to FAILED.
 	for _, delta := range report.NewFailures {
 		art, ok := byID[delta.ArtefactID]
 		if !ok {
 			continue
 		}
-		switch art.BuildFailureKind {
-		case domain.BuildFailureKindProduct, domain.BuildFailureKindUnknown, domain.BuildFailureKindNone:
-			// PRODUCT and UNKNOWN need analysis; BuildFailureKindNone means the
-			// kind hasn't been determined yet — include it to be safe.
+		if needsAnalysis(art.BuildFailureKind) {
 			return true
 		}
 	}
+
+	// First-boot: brand-new artefacts already in a FAILED state.
+	for _, art := range report.NewArtefacts {
+		if art.BuildLog == domain.BuildStatusFailed && needsAnalysis(art.BuildFailureKind) {
+			return true
+		}
+	}
+
 	return false
 }
