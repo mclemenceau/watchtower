@@ -717,6 +717,217 @@ func TestFormatScheduledSummary_ZeroPct(t *testing.T) {
 	}
 }
 
+func TestFormatScheduledSummary_BuildsPctInHeading(t *testing.T) {
+	artefacts := []domain.Artefact{
+		{ID: 1, Name: "noble-desktop-amd64.iso", OS: "ubuntu",
+			Release: "noble", Version: today},
+		{ID: 2, Name: "noble-server-amd64.iso", OS: "ubuntu-server",
+			Release: "noble", Version: yesterday,
+			BuildLog:                domain.BuildStatusFailed,
+			BuildFailureKind:        domain.BuildFailureKindInfra,
+			BuildFailureDescription: "infra issue"},
+	}
+	out := FormatScheduledSummary(artefacts, []string{"noble"})
+	// 1 built out of 2 → 50%
+	if !strings.Contains(out, "50%") {
+		t.Errorf("expected 50%% in heading, got:\n%s", out)
+	}
+}
+
+func TestFormatScheduledSummary_BuildsPct100(t *testing.T) {
+	artefacts := []domain.Artefact{
+		{ID: 1, Name: "noble-desktop-amd64.iso", OS: "ubuntu",
+			Release: "noble", Version: today},
+		{ID: 2, Name: "noble-server-amd64.iso", OS: "ubuntu-server",
+			Release: "noble", Version: today},
+	}
+	out := FormatScheduledSummary(artefacts, []string{"noble"})
+	if !strings.Contains(out, "100%") {
+		t.Errorf("expected 100%% in heading, got:\n%s", out)
+	}
+}
+
+// helpers shared by tests section test cases below.
+func buildWithExec(
+	buildID int, arch string, execs []domain.TestExecution,
+) domain.ArtefactBuild {
+	return domain.ArtefactBuild{ID: buildID, Architecture: arch,
+		TestExecutions: execs}
+}
+
+func exec(id int, plan, status string) domain.TestExecution {
+	return domain.TestExecution{ID: id, TestPlan: plan, Status: status,
+		CreatedAt: "2026-07-29T10:00:00"}
+}
+
+func TestFormatScheduledSummary_TestsAllPassed(t *testing.T) {
+	artefacts := []domain.Artefact{
+		{ID: 1, Name: "noble-desktop-amd64.iso", OS: "ubuntu",
+			Release: "noble", Version: today,
+			Builds: []domain.ArtefactBuild{
+				buildWithExec(10, "amd64", []domain.TestExecution{
+					exec(100, "Jenkins image validation", "PASSED"),
+				}),
+			}},
+	}
+	out := FormatScheduledSummary(artefacts, []string{"noble"})
+	if !strings.Contains(out, "noble tests") {
+		t.Errorf("expected tests section, got:\n%s", out)
+	}
+	if !strings.Contains(out, "pass rate 100%") {
+		t.Errorf("expected pass rate 100%%, got:\n%s", out)
+	}
+	if strings.Contains(out, "Failures") {
+		t.Errorf("expected no Failures line when all passed, got:\n%s", out)
+	}
+}
+
+func TestFormatScheduledSummary_TestsWithFailures(t *testing.T) {
+	artefacts := []domain.Artefact{
+		{ID: 1, Name: "noble-desktop-amd64.iso", OS: "ubuntu",
+			Release: "noble", Version: today,
+			Builds: []domain.ArtefactBuild{
+				buildWithExec(10, "amd64", []domain.TestExecution{
+					exec(100, "Jenkins image validation", "FAILED"),
+					exec(101, "Manual Testing", "PASSED"),
+				}),
+			}},
+	}
+	out := FormatScheduledSummary(artefacts, []string{"noble"})
+	if !strings.Contains(out, "Failures") {
+		t.Errorf("expected Failures line, got:\n%s", out)
+	}
+	if !strings.Contains(out, "ubuntu") {
+		t.Errorf("expected product name in failures, got:\n%s", out)
+	}
+	if !strings.Contains(out, "amd64") {
+		t.Errorf("expected arch in failures, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Jenkins image validation") {
+		t.Errorf("expected failed plan name in failures, got:\n%s", out)
+	}
+	// PASSED plan must not appear in the failure line.
+	if strings.Contains(out, "Manual Testing") {
+		t.Errorf("passed plan should not appear in failures, got:\n%s", out)
+	}
+}
+
+func TestFormatScheduledSummary_TestsNoExecutions(t *testing.T) {
+	// Artefacts have no Builds at all → tests section must be absent.
+	artefacts := []domain.Artefact{
+		{ID: 1, Name: "noble-desktop-amd64.iso", OS: "ubuntu",
+			Release: "noble", Version: today},
+	}
+	out := FormatScheduledSummary(artefacts, []string{"noble"})
+	if strings.Contains(out, "tests") {
+		t.Errorf("expected no tests section when builds empty, got:\n%s", out)
+	}
+}
+
+func TestFormatScheduledSummary_TestsPassRatePartial(t *testing.T) {
+	// 3 passed, 1 failed → pass rate 75%, counts (3/4)
+	artefacts := []domain.Artefact{
+		{ID: 1, Name: "noble-desktop-amd64.iso", OS: "ubuntu",
+			Release: "noble", Version: today,
+			Builds: []domain.ArtefactBuild{
+				buildWithExec(10, "amd64", []domain.TestExecution{
+					exec(100, "Plan A", "PASSED"),
+					exec(101, "Plan B", "PASSED"),
+					exec(102, "Plan C", "PASSED"),
+					exec(103, "Plan D", "FAILED"),
+				}),
+			}},
+	}
+	out := FormatScheduledSummary(artefacts, []string{"noble"})
+	if !strings.Contains(out, "pass rate 75%") {
+		t.Errorf("expected pass rate 75%%, got:\n%s", out)
+	}
+	if !strings.Contains(out, "(3/4)") {
+		t.Errorf("expected counts (3/4), got:\n%s", out)
+	}
+}
+
+func TestFormatScheduledSummary_TestsMultiPlanFailures(t *testing.T) {
+	// One product+arch fails two plans → both plans appear sorted in brackets.
+	artefacts := []domain.Artefact{
+		{ID: 1, Name: "noble-desktop-amd64.iso", OS: "ubuntu",
+			Release: "noble", Version: today,
+			Builds: []domain.ArtefactBuild{
+				buildWithExec(10, "amd64", []domain.TestExecution{
+					exec(100, "Manual Testing", "FAILED"),
+					exec(101, "Jenkins image validation", "FAILED"),
+				}),
+			}},
+	}
+	out := FormatScheduledSummary(artefacts, []string{"noble"})
+	// Both plans must appear; Jenkins sorts before Manual alphabetically.
+	if !strings.Contains(out, "Jenkins image validation") {
+		t.Errorf("expected Jenkins plan in failures, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Manual Testing") {
+		t.Errorf("expected Manual Testing plan in failures, got:\n%s", out)
+	}
+	jenkinsIdx := strings.Index(out, "Jenkins image validation")
+	manualIdx := strings.Index(out, "Manual Testing")
+	if jenkinsIdx > manualIdx {
+		t.Errorf("expected Jenkins before Manual in sorted bracket, got:\n%s", out)
+	}
+}
+
+func TestFormatScheduledSummary_TestsReleaseOrder(t *testing.T) {
+	artefacts := []domain.Artefact{
+		{ID: 1, Name: "noble-desktop-amd64.iso", OS: "ubuntu",
+			Release: "noble", Version: today,
+			Builds: []domain.ArtefactBuild{
+				buildWithExec(10, "amd64", []domain.TestExecution{
+					exec(100, "Jenkins image validation", "PASSED"),
+				}),
+			}},
+		{ID: 2, Name: "plucky-desktop-amd64.iso", OS: "ubuntu",
+			Release: "plucky", Version: today,
+			Builds: []domain.ArtefactBuild{
+				buildWithExec(20, "amd64", []domain.TestExecution{
+					exec(200, "Jenkins image validation", "PASSED"),
+				}),
+			}},
+	}
+	// Scope: plucky first, then noble.
+	out := FormatScheduledSummary(artefacts, []string{"plucky", "noble"})
+	pluckyIdx := strings.Index(out, "plucky tests")
+	nobleIdx := strings.Index(out, "noble tests")
+	if pluckyIdx < 0 || nobleIdx < 0 {
+		t.Fatalf("expected both releases in tests section, got:\n%s", out)
+	}
+	if pluckyIdx > nobleIdx {
+		t.Errorf("expected plucky tests before noble tests, got:\n%s", out)
+	}
+}
+
+func TestFormatScheduledSummary_TestsOnlyCountsDisplayable(t *testing.T) {
+	// "Image build" plan must be excluded from counts and failures.
+	artefacts := []domain.Artefact{
+		{ID: 1, Name: "noble-desktop-amd64.iso", OS: "ubuntu",
+			Release: "noble", Version: today,
+			Builds: []domain.ArtefactBuild{
+				buildWithExec(10, "amd64", []domain.TestExecution{
+					exec(100, "Image build", "FAILED"), // must be ignored
+					exec(101, "Jenkins image validation", "PASSED"),
+				}),
+			}},
+	}
+	out := FormatScheduledSummary(artefacts, []string{"noble"})
+	// Only Jenkins execution counted → 1/1, pass rate 100%.
+	if !strings.Contains(out, "pass rate 100%") {
+		t.Errorf("expected pass rate 100%% (Image build excluded), got:\n%s", out)
+	}
+	if !strings.Contains(out, "(1/1)") {
+		t.Errorf("expected counts (1/1), got:\n%s", out)
+	}
+	if strings.Contains(out, "Image build") {
+		t.Errorf("Image build plan must not appear in output, got:\n%s", out)
+	}
+}
+
 // --- buildWeatherEmoji ---
 
 func TestBuildWeatherEmoji(t *testing.T) {

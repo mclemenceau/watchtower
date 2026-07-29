@@ -297,34 +297,31 @@ func FormatTestsStatusRelease(artefacts []domain.Artefact, release, product stri
 }
 
 // FormatScheduledSummary renders the scheduled build summary posted to the
-// channel on the configured cron schedule.
+// channel on the configured cron schedule. It has two sections separated by a
+// blank line: builds and tests.
 //
-// For each release it shows:
-//   - A headline with the built percentage and count.
-//   - INFRA failures grouped by their short description (failure family), each
-//     listing affected products and arches in compact form.
-//   - PRODUCT failures grouped by their description (or LLM hypothesis when
-//     available in a future extension), listing affected products and arches.
-//   - A count of in-progress / not-yet-started artefacts when any exist.
+// Builds section — for each release:
+//   - Heading with built count, total, weather emoji, and build %.
+//   - INFRA and PRODUCT failure lines when failures exist.
+//
+// Tests section — for each release that has displayable test executions:
+//   - Heading with weather emoji, pass rate %, and passed/total counts.
+//   - Failures line listing product (arch) [failed plans] when any FAILED.
 //
 // Example:
 //
-//	**stonking — 0% (0/37 built today)**
+//	### Build Summary · 2026-07-29 10:00 UTC
 //
-//	❌ INFRA — 30 failing
+//	#### plucky (12/37) ⛈️  · 32%
+//	  Infra (3): ubuntu (amd64) · ubuntu-server (amd64, arm64)
 //
-//	  LP build succeeded but image could not be submitted to Test Observer (10)
-//	   - ubuntu, ubuntu-mate, kubuntu (amd64)
-//	   - ubuntu-server (amd64, arm64, riscv64)
+//	#### noble (37/37) ☀️  · 100%
 //
-//	  cdimage crashed mid-run, build was orphaned (14)
-//	   - ubuntu-base (amd64, arm64, armhf, ppc64el, riscv64)
 //
-//	❌ PRODUCT — 5 failing
+//	#### plucky tests ⛈️  · pass rate 85% (34/40)
+//	  Failures (6): ubuntu (amd64) [Jenkins image validation]
 //
-//	  livefs build failure requires analysis (5)
-//	   - ubuntu, edubuntu (arm64)
-//	   - ubuntu-wsl (amd64, arm64)
+//	#### noble tests ☀️  · pass rate 100% (40/40)
 //
 // releasesScope controls which releases to include and in which order. When nil or
 // empty, all releases present in artefacts are used (sorted alphabetically).
@@ -379,7 +376,12 @@ func FormatScheduledSummary(artefacts []domain.Artefact, releasesScope []string)
 		}
 
 		weather := buildWeatherEmoji(built, total)
-		fmt.Fprintf(&sb, "#### %s (%d/%d) %s\n", release, built, total, weather)
+		buildPct := 0
+		if total > 0 {
+			buildPct = built * 100 / total
+		}
+		fmt.Fprintf(&sb, "#### %s (%d/%d) %s  · %d%%\n",
+			release, built, total, weather, buildPct)
 
 		if len(infraArts) > 0 {
 			fmt.Fprintf(&sb, "  Infra (%d): %s\n", len(infraArts), formatFailureLine(infraArts))
@@ -394,6 +396,15 @@ func FormatScheduledSummary(artefacts []domain.Artefact, releasesScope []string)
 	if !any {
 		return "No data available for the configured releases."
 	}
+
+	// Append the tests section (blank line separator, then one heading per
+	// release that has displayable test executions).
+	testsSection := formatTestsSummarySection(byRelease, ordered)
+	if testsSection != "" {
+		sb.WriteString("\n")
+		sb.WriteString(testsSection)
+	}
+
 	return sb.String()
 }
 
@@ -475,6 +486,156 @@ func formatFailureLine(arts []domain.Artefact) string {
 			strings.Join(g.archs, ", ")))
 	}
 	return strings.Join(tokens, " · ")
+}
+
+// testFailureEntry holds the failure data for one artefact+build combination,
+// used as input to formatTestsFailureLine.
+type testFailureEntry struct {
+	os    string
+	arch  string
+	plans []string // sorted list of failed test plan names
+}
+
+// formatTestsFailureLine renders a compact one-liner for test failures.
+// Entries are grouped by product (OS); arches and failed plan names are
+// accumulated and deduplicated across arches for each product.
+//
+//	ubuntu (amd64, arm64) [Jenkins image validation] · ubuntu-server (amd64) [Jenkins image validation, Manual Testing]
+func formatTestsFailureLine(entries []testFailureEntry) string {
+	type productGroup struct {
+		archSet map[string]struct{}
+		planSet map[string]struct{}
+	}
+	productOrder := []string{}
+	byProduct := make(map[string]*productGroup)
+
+	for _, e := range entries {
+		g, seen := byProduct[e.os]
+		if !seen {
+			g = &productGroup{
+				archSet: make(map[string]struct{}),
+				planSet: make(map[string]struct{}),
+			}
+			byProduct[e.os] = g
+			productOrder = append(productOrder, e.os)
+		}
+		g.archSet[e.arch] = struct{}{}
+		for _, p := range e.plans {
+			g.planSet[p] = struct{}{}
+		}
+	}
+	sort.Strings(productOrder)
+
+	tokens := make([]string, 0, len(productOrder))
+	for _, prod := range productOrder {
+		g := byProduct[prod]
+
+		archs := make([]string, 0, len(g.archSet))
+		for a := range g.archSet {
+			archs = append(archs, a)
+		}
+		sort.Strings(archs)
+
+		plans := make([]string, 0, len(g.planSet))
+		for p := range g.planSet {
+			plans = append(plans, p)
+		}
+		sort.Strings(plans)
+
+		tokens = append(tokens, fmt.Sprintf("%s (%s) [%s]",
+			prod,
+			strings.Join(archs, ", "),
+			strings.Join(plans, ", ")))
+	}
+	return strings.Join(tokens, " · ")
+}
+
+// formatTestsSummarySection renders the tests half of the scheduled summary.
+// It iterates releases in the given order, computes pass/fail counts from
+// deduplicated displayable test executions, and emits one heading per release
+// that has at least one such execution. Releases with no displayable executions
+// are omitted entirely.
+func formatTestsSummarySection(
+	byRelease map[string][]domain.Artefact,
+	ordered []string,
+) string {
+	var sb strings.Builder
+	for _, release := range ordered {
+		arts, ok := byRelease[release]
+		if !ok {
+			continue
+		}
+
+		passed, failed := 0, 0
+		// failuresByArtBuild collects test failure entries keyed by
+		// "artefactID:buildID" to avoid double-counting.
+		type artBuildKey struct{ artID, buildID int }
+		failMap := make(map[artBuildKey]*testFailureEntry)
+
+		for _, art := range arts {
+			for _, b := range art.Builds {
+				// Deduplicate: keep latest CreatedAt per test plan.
+				latest := make(map[string]domain.TestExecution)
+				for _, te := range b.TestExecutions {
+					if !domain.IsDisplayable(te) {
+						continue
+					}
+					prev, seen := latest[te.TestPlan]
+					if !seen || te.CreatedAt > prev.CreatedAt {
+						latest[te.TestPlan] = te
+					}
+				}
+				for _, te := range latest {
+					switch te.Status {
+					case "PASSED":
+						passed++
+					case "FAILED":
+						failed++
+						key := artBuildKey{art.ID, b.ID}
+						e, seen := failMap[key]
+						if !seen {
+							e = &testFailureEntry{
+								os:   art.OS,
+								arch: b.Architecture,
+							}
+							failMap[key] = e
+						}
+						e.plans = append(e.plans, te.TestPlan)
+					}
+				}
+			}
+		}
+
+		total := passed + failed
+		if total == 0 {
+			continue // no displayable executions — omit this release
+		}
+
+		pct := passed * 100 / total
+		weather := buildWeatherEmoji(passed, total)
+		fmt.Fprintf(&sb, "#### %s tests %s  · pass rate %d%% (%d/%d)\n",
+			release, weather, pct, passed, total)
+
+		if failed > 0 {
+			entries := make([]testFailureEntry, 0, len(failMap))
+			for _, e := range failMap {
+				sort.Strings(e.plans)
+				entries = append(entries, *e)
+			}
+			// Sort entries for deterministic output.
+			sort.Slice(entries, func(i, j int) bool {
+				if entries[i].os != entries[j].os {
+					return entries[i].os < entries[j].os
+				}
+				return entries[i].arch < entries[j].arch
+			})
+			fmt.Fprintf(&sb, "  Failures (%d): %s\n",
+				failed, formatTestsFailureLine(entries))
+		}
+
+		sb.WriteString("\n")
+	}
+	return sb.String()
 }
 
 // archFromName extracts the CPU architecture token from an artefact name.
