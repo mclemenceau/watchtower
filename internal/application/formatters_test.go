@@ -771,8 +771,8 @@ func TestFormatScheduledSummary_TestsAllPassed(t *testing.T) {
 			}},
 	}
 	out := FormatScheduledSummary(artefacts, []string{"noble"})
-	if !strings.Contains(out, "noble tests") {
-		t.Errorf("expected tests section, got:\n%s", out)
+	if !strings.Contains(out, "Test Summary") {
+		t.Errorf("expected Test Summary header, got:\n%s", out)
 	}
 	if !strings.Contains(out, "pass rate 100%") {
 		t.Errorf("expected pass rate 100%%, got:\n%s", out)
@@ -819,8 +819,8 @@ func TestFormatScheduledSummary_TestsNoExecutions(t *testing.T) {
 			Release: "noble", Version: today},
 	}
 	out := FormatScheduledSummary(artefacts, []string{"noble"})
-	if strings.Contains(out, "tests") {
-		t.Errorf("expected no tests section when builds empty, got:\n%s", out)
+	if strings.Contains(out, "Test Summary") {
+		t.Errorf("expected no Test Summary section when builds empty, got:\n%s", out)
 	}
 }
 
@@ -893,13 +893,20 @@ func TestFormatScheduledSummary_TestsReleaseOrder(t *testing.T) {
 	}
 	// Scope: plucky first, then noble.
 	out := FormatScheduledSummary(artefacts, []string{"plucky", "noble"})
-	pluckyIdx := strings.Index(out, "plucky tests")
-	nobleIdx := strings.Index(out, "noble tests")
+	// Both release headings must appear under the Test Summary header.
+	testSectionStart := strings.Index(out, "Test Summary")
+	if testSectionStart < 0 {
+		t.Fatalf("expected Test Summary header, got:\n%s", out)
+	}
+	// Find release headings within the test section and check order.
+	testSection := out[testSectionStart:]
+	pluckyIdx := strings.Index(testSection, "#### plucky")
+	nobleIdx := strings.Index(testSection, "#### noble")
 	if pluckyIdx < 0 || nobleIdx < 0 {
 		t.Fatalf("expected both releases in tests section, got:\n%s", out)
 	}
 	if pluckyIdx > nobleIdx {
-		t.Errorf("expected plucky tests before noble tests, got:\n%s", out)
+		t.Errorf("expected plucky before noble in tests section, got:\n%s", out)
 	}
 }
 

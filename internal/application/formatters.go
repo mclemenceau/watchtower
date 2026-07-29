@@ -318,10 +318,12 @@ func FormatTestsStatusRelease(artefacts []domain.Artefact, release, product stri
 //	#### noble (37/37) ☀️  · 100%
 //
 //
-//	#### plucky tests ⛈️  · pass rate 85% (34/40)
+//	### Test Summary · 2026-07-29 10:00 UTC
+//
+//	#### plucky ⛈️  · pass rate 85% (34/40)
 //	  Failures (6): ubuntu (amd64) [Jenkins image validation]
 //
-//	#### noble tests ☀️  · pass rate 100% (40/40)
+//	#### noble ☀️  · pass rate 100% (40/40)
 //
 // releasesScope controls which releases to include and in which order. When nil or
 // empty, all releases present in artefacts are used (sorted alphabetically).
@@ -560,6 +562,7 @@ func formatTestsSummarySection(
 	ordered []string,
 ) string {
 	var sb strings.Builder
+	headerWritten := false
 	for _, release := range ordered {
 		arts, ok := byRelease[release]
 		if !ok {
@@ -567,8 +570,8 @@ func formatTestsSummarySection(
 		}
 
 		passed, failed := 0, 0
-		// failuresByArtBuild collects test failure entries keyed by
-		// "artefactID:buildID" to avoid double-counting.
+		// failMap collects test failure entries keyed by artefactID+buildID
+		// to avoid double-counting.
 		type artBuildKey struct{ artID, buildID int }
 		failMap := make(map[artBuildKey]*testFailureEntry)
 
@@ -611,9 +614,15 @@ func formatTestsSummarySection(
 			continue // no displayable executions — omit this release
 		}
 
+		if !headerWritten {
+			fmt.Fprintf(&sb, "### Test Summary · %s\n\n",
+				time.Now().UTC().Format("2006-01-02 15:04 UTC"))
+			headerWritten = true
+		}
+
 		pct := passed * 100 / total
 		weather := buildWeatherEmoji(passed, total)
-		fmt.Fprintf(&sb, "#### %s tests %s  · pass rate %d%% (%d/%d)\n",
+		fmt.Fprintf(&sb, "#### %s %s  · pass rate %d%% (%d/%d)\n",
 			release, weather, pct, passed, total)
 
 		if failed > 0 {
