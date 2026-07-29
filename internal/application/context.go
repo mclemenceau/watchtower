@@ -20,6 +20,18 @@ type contextArtefact struct {
 	BuildFailureDescription string                  `json:"build_failure_description,omitempty"`
 }
 
+// contextTestExecution is a compact projection of a single test execution for
+// LLM context. Only injected when the user message contains test-semantic words.
+type contextTestExecution struct {
+	ArtefactID   int    `json:"artefact_id"`
+	ArtefactName string `json:"artefact_name"`
+	Release      string `json:"release"`
+	Arch         string `json:"arch"`
+	TestPlan     string `json:"test_plan"`
+	Status       string `json:"status"`
+	CILink       string `json:"ci_link,omitempty"`
+}
+
 // contextFailure is a compact projection of domain.FailureRecord for LLM context.
 type contextFailure struct {
 	ArtefactID         int                     `json:"artefact_id"`
@@ -37,9 +49,11 @@ type contextFailure struct {
 }
 
 // contextPayload is the top-level structure serialised into contextJSON.
+// Tests is only populated when the message contains test-semantic words.
 type contextPayload struct {
-	Artefacts []contextArtefact `json:"artefacts"`
-	Failures  []contextFailure  `json:"failures"`
+	Artefacts []contextArtefact      `json:"artefacts"`
+	Failures  []contextFailure       `json:"failures"`
+	Tests     []contextTestExecution `json:"tests,omitempty"`
 }
 
 // maxContextArtefacts is the hard cap on artefacts injected into the LLM prompt.
@@ -57,6 +71,19 @@ var semanticFailureWords = []string{
 	"error", "errors",
 	"wrong",
 	"infra", "infrastructure",
+}
+
+// semanticTestWords are message words that indicate the user is asking about
+// test executions. When present, test execution data is injected into the LLM
+// context alongside the usual artefact/failure data.
+var semanticTestWords = []string{
+	"test", "tests", "testing",
+	"testplan", "test plan",
+	"passed", "passing",
+	"jenkins", "validation",
+	"ci", "ci link",
+	"execution", "executions",
+	"suite", "suites",
 }
 
 // semanticBuildKindMap maps message words to the BuildFailureKind they imply.
@@ -77,12 +104,17 @@ var semanticBuildKindMap = map[string]domain.BuildFailureKind{
 //  2. Match against unique product/OS names in the snapshot.
 //  3. Detect semantic failure keywords (fail, broken, issue, infra, …).
 //  4. Detect BuildFailureKind keywords (infra → INFRA, product → PRODUCT).
-//  5. If release/product matches found: include those artefacts; if failure
+//  5. Detect semantic test keywords (test, passed, jenkins, validation, …).
+//  6. If release/product matches found: include those artefacts; if failure
 //     semantics also detected, narrow further to FAILED-only (and optionally
 //     to the matched kind).
-//  6. If no release/product match: fall back to all FAILED artefacts (most
+//  7. If no release/product match: fall back to all FAILED artefacts (most
 //     relevant for open-ended questions), capped at maxContextArtefacts.
-//  7. Always include active failures that match the same filters.
+//     Exception: when test semantics are detected without failure semantics,
+//     fall back to all artefacts with any displayable test execution.
+//  8. Always include active failures that match the same filters.
+//  9. When test semantics are detected, include a flattened list of all
+//     displayable test executions for the filtered artefacts.
 //
 // Returns "" on marshal error or when both slices are empty.
 func BuildContext(msg string, artefacts []domain.Artefact, failures domain.FailureStore) string {
@@ -104,12 +136,18 @@ func BuildContext(msg string, artefacts []domain.Artefact, failures domain.Failu
 	matchedReleases := extractTokens(msgLower, releaseSet)
 	matchedProducts := extractTokens(msgLower, productSet)
 
-	// Detect semantic signals: is the user asking about failures? about a kind?
+	// Detect semantic signals: failures? a kind? test executions?
 	failureSemantics := containsAny(msgLower, semanticFailureWords)
 	matchedKind := extractBuildKind(msgLower)
+	testSemantics := containsAny(msgLower, semanticTestWords)
 
 	// Filter artefacts using all signals.
-	filtered := filterArtefacts(artefacts, matchedReleases, matchedProducts, failureSemantics, matchedKind)
+	filtered := filterArtefacts(
+		artefacts,
+		matchedReleases, matchedProducts,
+		failureSemantics, matchedKind,
+		testSemantics,
+	)
 
 	// Convert to compact projections, capped at maxContextArtefacts.
 	ctxArts := make([]contextArtefact, 0, len(filtered))
@@ -155,13 +193,22 @@ func BuildContext(msg string, artefacts []domain.Artefact, failures domain.Failu
 		ctxFails = append(ctxFails, cf)
 	}
 
-	if len(ctxArts) == 0 && len(ctxFails) == 0 {
+	// When the message is test-focused, collect all displayable test executions
+	// from the filtered artefacts. We use filtered (not the capped ctxArts) so
+	// that the test data matches the artefact selection logic exactly.
+	var ctxTests []contextTestExecution
+	if testSemantics {
+		ctxTests = collectTestExecutions(filtered)
+	}
+
+	if len(ctxArts) == 0 && len(ctxFails) == 0 && len(ctxTests) == 0 {
 		return ""
 	}
 
 	payload := contextPayload{
 		Artefacts: ctxArts,
 		Failures:  ctxFails,
+		Tests:     ctxTests,
 	}
 	b, err := json.Marshal(payload)
 	if err != nil {
@@ -222,10 +269,12 @@ func extractTokens(msgLower string, tokenSet map[string]struct{}) map[string]str
 }
 
 // filterArtefacts returns the subset of artefacts matching the given release,
-// product, failure-semantics, and kind filters.
+// product, failure-semantics, kind, and test-semantics filters.
 //
 // When both release and product sets are empty (no tokens found in the message),
 // it falls back to returning only FAILED artefacts so the context stays relevant.
+// Exception: when testSemantics is true without failureSemantics, the fallback
+// returns all artefacts that have at least one displayable test execution.
 //
 // When failureSemantics is true and a release/product filter matched, non-FAILED
 // artefacts are stripped — the user is clearly asking about problems, not
@@ -238,19 +287,30 @@ func filterArtefacts(
 	releases, products map[string]struct{},
 	failureSemantics bool,
 	matchedKind domain.BuildFailureKind,
+	testSemantics bool,
 ) []domain.Artefact {
 	noFilter := len(releases) == 0 && len(products) == 0
 
 	var out []domain.Artefact
 	for _, a := range artefacts {
 		if noFilter {
-			// Fallback: only include failed artefacts to keep context tight.
-			// If a kind was specified, narrow further.
-			if a.BuildLog != domain.BuildStatusFailed {
-				continue
-			}
-			if matchedKind != domain.BuildFailureKindNone && a.BuildFailureKind != matchedKind {
-				continue
+			// Fallback: select artefacts relevant to the question type.
+			if testSemantics && !failureSemantics {
+				// Test-focused question: include artefacts with any displayable
+				// test execution regardless of build status.
+				if !hasDisplayableTestExecution(a) {
+					continue
+				}
+			} else {
+				// Default / failure-focused fallback: only include failed
+				// artefacts to keep context tight.
+				if a.BuildLog != domain.BuildStatusFailed {
+					continue
+				}
+				if matchedKind != domain.BuildFailureKindNone &&
+					a.BuildFailureKind != matchedKind {
+					continue
+				}
 			}
 			out = append(out, a)
 			continue
@@ -280,11 +340,61 @@ func filterArtefacts(
 		}
 
 		// Apply kind filter if a kind keyword was detected.
-		if matchedKind != domain.BuildFailureKindNone && a.BuildFailureKind != matchedKind {
+		if matchedKind != domain.BuildFailureKindNone &&
+			a.BuildFailureKind != matchedKind {
 			continue
 		}
 
 		out = append(out, a)
+	}
+	return out
+}
+
+// hasDisplayableTestExecution reports whether an artefact has at least one
+// displayable test execution across all its builds.
+func hasDisplayableTestExecution(a domain.Artefact) bool {
+	for _, b := range a.Builds {
+		for _, te := range b.TestExecutions {
+			if domain.IsDisplayable(te) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// collectTestExecutions returns a flat list of all displayable test executions
+// across the given artefacts. Each execution is projected into a compact
+// contextTestExecution struct. Duplicate test plans per build are deduplicated
+// to the latest execution by CreatedAt, matching the formatter behaviour.
+func collectTestExecutions(artefacts []domain.Artefact) []contextTestExecution {
+	var out []contextTestExecution
+	for _, a := range artefacts {
+		for _, b := range a.Builds {
+			// Deduplicate: keep the latest execution per test plan for this
+			// build, exactly as FormatTestsStatusRelease does.
+			latest := make(map[string]domain.TestExecution)
+			for _, te := range b.TestExecutions {
+				if !domain.IsDisplayable(te) {
+					continue
+				}
+				prev, seen := latest[te.TestPlan]
+				if !seen || te.CreatedAt > prev.CreatedAt {
+					latest[te.TestPlan] = te
+				}
+			}
+			for _, te := range latest {
+				out = append(out, contextTestExecution{
+					ArtefactID:   a.ID,
+					ArtefactName: a.Name,
+					Release:      a.Release,
+					Arch:         b.Architecture,
+					TestPlan:     te.TestPlan,
+					Status:       te.Status,
+					CILink:       te.CILink,
+				})
+			}
+		}
 	}
 	return out
 }

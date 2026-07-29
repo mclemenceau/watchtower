@@ -48,6 +48,18 @@ Supported commands:
   investigate <artefact-id>
   help
 
+State data schema (when provided):
+  artefacts[]  — build status per artefact: id, name, version, os, release,
+                 build_log (BUILT|FAILED|IN_PROGRESS|NOT_STARTED|UNKNOWN),
+                 build_failure_kind (INFRA|PRODUCT), build_failure_description
+  failures[]   — persistent failure records: artefact_id, artefact_name,
+                 release, product, first_seen_version, last_seen_version,
+                 occurrences, failure_kind, failure_description,
+                 analysis_category, analysis_hypothesis, analysis_next_action
+  tests[]      — test execution results (only present for test-focused queries):
+                 artefact_id, artefact_name, release, arch, test_plan,
+                 status (PASSED|FAILED|IN_PROGRESS|NOT_STARTED), ci_link
+
 Respond with JSON in exactly one of these three forms:
 
 1. COMMAND — you can map the question to a known command with high confidence:
@@ -85,6 +97,18 @@ Examples:
 
   User: "status"
   → {"command":"","confidence":0.2,"clarification":"Do you want build status, test status, or failure status?","answer":""}
+
+  User: "are the noble tests passing?"
+  → {"command":"tests status noble","confidence":0.9,"clarification":"","answer":""}
+
+  User: "what is the test status?"
+  → {"command":"tests status","confidence":0.9,"clarification":"","answer":""}
+
+  User: "which plucky desktop test plans are failing?"
+  → {"command":"","confidence":0.0,"clarification":"","answer":"**2 test plans are failing for plucky desktop**: noble-desktop-amd64 — Jenkins image validation ❌ FAILED (ID 1234), noble-desktop-arm64 — Manual Testing ❌ FAILED (ID 1235)."}
+
+  User: "did the noble server Jenkins validation pass?"
+  → {"command":"","confidence":0.0,"clarification":"","answer":"Noble server Jenkins image validation: amd64 ✅ PASSED, arm64 ❌ FAILED (see ci_link for details)."}
 `
 
 // intentResponse is the JSON structure the LLM is instructed to return.

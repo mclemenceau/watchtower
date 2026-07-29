@@ -404,3 +404,274 @@ func TestBuildContext_FallbackInfraKindFilter(t *testing.T) {
 		t.Errorf("expected only INFRA artefact (ID 1) in fallback+kind, got %+v", payload.Artefacts)
 	}
 }
+
+// --- Tests for test-execution context injection ---
+
+// makeArtefactWithTests builds an Artefact that includes a single build with
+// the given test executions.
+func makeArtefactWithTests(
+	id int,
+	name, release, os string,
+	buildLog domain.BuildStatusState,
+	executions []domain.TestExecution,
+) domain.Artefact {
+	return domain.Artefact{
+		ID:       id,
+		Name:     name,
+		Release:  release,
+		OS:       os,
+		Version:  "20240101",
+		BuildLog: buildLog,
+		Builds: []domain.ArtefactBuild{
+			{
+				ID:             id * 10,
+				Architecture:   "amd64",
+				TestExecutions: executions,
+			},
+		},
+	}
+}
+
+func TestBuildContext_TestSemanticsInjectsTestsField(t *testing.T) {
+	// A message with "tests" should populate the Tests field in the payload.
+	artefacts := []domain.Artefact{
+		makeArtefactWithTests(1, "noble-desktop-amd64.iso", "noble", "ubuntu-desktop",
+			domain.BuildStatusBuilt,
+			[]domain.TestExecution{
+				{
+					ID:        100,
+					TestPlan:  "Jenkins image validation",
+					Status:    "PASSED",
+					CreatedAt: "2024-01-01T10:00:00Z",
+				},
+			},
+		),
+	}
+
+	got := BuildContext("are the noble tests passing?", artefacts, domain.FailureStore{})
+
+	if got == "" {
+		t.Fatal("expected non-empty contextJSON")
+	}
+	var payload contextPayload
+	if err := json.Unmarshal([]byte(got), &payload); err != nil {
+		t.Fatalf("invalid JSON: %v\nraw: %s", err, got)
+	}
+	if len(payload.Tests) == 0 {
+		t.Fatalf("expected Tests field populated for test-semantic message, got empty")
+	}
+	te := payload.Tests[0]
+	if te.ArtefactID != 1 {
+		t.Errorf("expected ArtefactID=1, got %d", te.ArtefactID)
+	}
+	if te.TestPlan != "Jenkins image validation" {
+		t.Errorf("expected TestPlan='Jenkins image validation', got %q", te.TestPlan)
+	}
+	if te.Status != "PASSED" {
+		t.Errorf("expected Status=PASSED, got %q", te.Status)
+	}
+	if te.Release != "noble" {
+		t.Errorf("expected Release=noble, got %q", te.Release)
+	}
+	if te.Arch != "amd64" {
+		t.Errorf("expected Arch=amd64, got %q", te.Arch)
+	}
+}
+
+func TestBuildContext_NoTestSemanticsOmitsTestsField(t *testing.T) {
+	// A message without test-semantic words must NOT populate the Tests field.
+	artefacts := []domain.Artefact{
+		makeArtefactWithTests(1, "noble-desktop-amd64.iso", "noble", "ubuntu-desktop",
+			domain.BuildStatusBuilt,
+			[]domain.TestExecution{
+				{
+					ID:        100,
+					TestPlan:  "Jenkins image validation",
+					Status:    "PASSED",
+					CreatedAt: "2024-01-01T10:00:00Z",
+				},
+			},
+		),
+	}
+
+	got := BuildContext("show me noble builds", artefacts, domain.FailureStore{})
+
+	// If context is non-empty, verify Tests is absent.
+	if got != "" {
+		var payload contextPayload
+		if err := json.Unmarshal([]byte(got), &payload); err != nil {
+			t.Fatalf("invalid JSON: %v", err)
+		}
+		if len(payload.Tests) != 0 {
+			t.Errorf("expected Tests field absent for non-test message, got %+v", payload.Tests)
+		}
+		// Also verify raw JSON has no "tests" key.
+		if strings.Contains(got, `"tests"`) {
+			t.Errorf("raw JSON should not contain 'tests' key for non-test message, got: %s", got)
+		}
+	}
+}
+
+func TestBuildContext_TestSemanticsReleaseFilter(t *testing.T) {
+	// With a release filter and test semantics, only matching artefacts' tests
+	// should appear in the Tests field.
+	execNoble := []domain.TestExecution{
+		{ID: 1, TestPlan: "Jenkins image validation", Status: "PASSED",
+			CreatedAt: "2024-01-01T10:00:00Z"},
+	}
+	execOracular := []domain.TestExecution{
+		{ID: 2, TestPlan: "Jenkins image validation", Status: "FAILED",
+			CreatedAt: "2024-01-01T10:00:00Z"},
+	}
+	artefacts := []domain.Artefact{
+		makeArtefactWithTests(1, "noble-desktop-amd64.iso", "noble",
+			"ubuntu-desktop", domain.BuildStatusBuilt, execNoble),
+		makeArtefactWithTests(2, "oracular-desktop-amd64.iso", "oracular",
+			"ubuntu-desktop", domain.BuildStatusBuilt, execOracular),
+	}
+
+	got := BuildContext("noble test results", artefacts, domain.FailureStore{})
+
+	var payload contextPayload
+	if err := json.Unmarshal([]byte(got), &payload); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if len(payload.Tests) == 0 {
+		t.Fatal("expected Tests populated")
+	}
+	for _, te := range payload.Tests {
+		if te.Release != "noble" {
+			t.Errorf("expected only noble tests, got release %q", te.Release)
+		}
+	}
+}
+
+func TestBuildContext_TestSemanticsIsDisplayableRespected(t *testing.T) {
+	// IsDisplayable filtering must be applied: "Image build" and
+	// "Manual Testing IN_PROGRESS" executions must not appear in Tests.
+	artefacts := []domain.Artefact{
+		makeArtefactWithTests(1, "noble-desktop-amd64.iso", "noble",
+			"ubuntu-desktop", domain.BuildStatusBuilt,
+			[]domain.TestExecution{
+				{ID: 1, TestPlan: "Image build", Status: "PASSED",
+					CreatedAt: "2024-01-01T09:00:00Z"},
+				{ID: 2, TestPlan: "Manual Testing", Status: "IN_PROGRESS",
+					CreatedAt: "2024-01-01T10:00:00Z"},
+				{ID: 3, TestPlan: "Jenkins image validation", Status: "PASSED",
+					CreatedAt: "2024-01-01T11:00:00Z"},
+			},
+		),
+	}
+
+	got := BuildContext("noble tests", artefacts, domain.FailureStore{})
+
+	var payload contextPayload
+	if err := json.Unmarshal([]byte(got), &payload); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	// Only "Jenkins image validation" should be present.
+	if len(payload.Tests) != 1 {
+		t.Fatalf("expected 1 displayable test, got %d: %+v", len(payload.Tests), payload.Tests)
+	}
+	if payload.Tests[0].TestPlan != "Jenkins image validation" {
+		t.Errorf("expected Jenkins plan, got %q", payload.Tests[0].TestPlan)
+	}
+}
+
+func TestBuildContext_TestSemanticsDeduplicate(t *testing.T) {
+	// Duplicate test plans per build are deduplicated to the latest by CreatedAt.
+	artefacts := []domain.Artefact{
+		makeArtefactWithTests(1, "noble-desktop-amd64.iso", "noble",
+			"ubuntu-desktop", domain.BuildStatusBuilt,
+			[]domain.TestExecution{
+				{ID: 1, TestPlan: "Jenkins image validation", Status: "FAILED",
+					CreatedAt: "2024-01-01T09:00:00Z"},
+				{ID: 2, TestPlan: "Jenkins image validation", Status: "PASSED",
+					CreatedAt: "2024-01-01T11:00:00Z"},
+			},
+		),
+	}
+
+	got := BuildContext("noble tests", artefacts, domain.FailureStore{})
+
+	var payload contextPayload
+	if err := json.Unmarshal([]byte(got), &payload); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	// After deduplication, only one row with the latest (PASSED) status.
+	if len(payload.Tests) != 1 {
+		t.Fatalf("expected 1 deduplicated test, got %d: %+v", len(payload.Tests), payload.Tests)
+	}
+	if payload.Tests[0].Status != "PASSED" {
+		t.Errorf("expected latest (PASSED) status after dedup, got %q", payload.Tests[0].Status)
+	}
+}
+
+func TestBuildContext_TestSemanticsFallbackIncludesBuiltArtefacts(t *testing.T) {
+	// When no release/product is mentioned and test semantics are detected
+	// (without failure semantics), BUILT artefacts with test executions should
+	// be included — the fallback should NOT restrict to FAILED only.
+	artefacts := []domain.Artefact{
+		makeArtefactWithTests(1, "noble-desktop-amd64.iso", "noble",
+			"ubuntu-desktop", domain.BuildStatusBuilt,
+			[]domain.TestExecution{
+				{ID: 1, TestPlan: "Jenkins image validation", Status: "PASSED",
+					CreatedAt: "2024-01-01T10:00:00Z"},
+			},
+		),
+		makeArtefact(2, "noble-server-amd64.iso", "noble",
+			"ubuntu-server", domain.BuildStatusFailed),
+	}
+
+	got := BuildContext("what are the test results?", artefacts, domain.FailureStore{})
+
+	var payload contextPayload
+	if err := json.Unmarshal([]byte(got), &payload); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	// Artefact 1 (BUILT, has tests) must be included in artefacts.
+	found := false
+	for _, a := range payload.Artefacts {
+		if a.ID == 1 {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected BUILT artefact with tests (ID 1) in context, got %+v", payload.Artefacts)
+	}
+	// Tests field must be populated.
+	if len(payload.Tests) == 0 {
+		t.Error("expected Tests field populated in open-ended test fallback")
+	}
+}
+
+func TestBuildContext_TestCILinkIncluded(t *testing.T) {
+	// CILink must appear in the contextTestExecution when present.
+	artefacts := []domain.Artefact{
+		makeArtefactWithTests(1, "noble-desktop-amd64.iso", "noble",
+			"ubuntu-desktop", domain.BuildStatusBuilt,
+			[]domain.TestExecution{
+				{
+					ID:        1,
+					TestPlan:  "Jenkins image validation",
+					Status:    "FAILED",
+					CILink:    "https://jenkins.example.com/job/42",
+					CreatedAt: "2024-01-01T10:00:00Z",
+				},
+			},
+		),
+	}
+
+	got := BuildContext("noble test results", artefacts, domain.FailureStore{})
+
+	var payload contextPayload
+	if err := json.Unmarshal([]byte(got), &payload); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if len(payload.Tests) == 0 {
+		t.Fatal("expected Tests populated")
+	}
+	if payload.Tests[0].CILink != "https://jenkins.example.com/job/42" {
+		t.Errorf("expected CILink set, got %q", payload.Tests[0].CILink)
+	}
+}
