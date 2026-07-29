@@ -774,8 +774,8 @@ func TestFormatScheduledSummary_TestsAllPassed(t *testing.T) {
 	if !strings.Contains(out, "Test Summary") {
 		t.Errorf("expected Test Summary header, got:\n%s", out)
 	}
-	if !strings.Contains(out, "pass rate 100%") {
-		t.Errorf("expected pass rate 100%%, got:\n%s", out)
+	if !strings.Contains(out, "100% (1/1)") {
+		t.Errorf("expected 100%% (1/1), got:\n%s", out)
 	}
 	if strings.Contains(out, "Failures") {
 		t.Errorf("expected no Failures line when all passed, got:\n%s", out)
@@ -825,7 +825,7 @@ func TestFormatScheduledSummary_TestsNoExecutions(t *testing.T) {
 }
 
 func TestFormatScheduledSummary_TestsPassRatePartial(t *testing.T) {
-	// 3 passed, 1 failed → pass rate 75%, counts (3/4)
+	// 3 passed, 1 failed → 75%, counts (3/4)
 	artefacts := []domain.Artefact{
 		{ID: 1, Name: "noble-desktop-amd64.iso", OS: "ubuntu",
 			Release: "noble", Version: today,
@@ -839,8 +839,8 @@ func TestFormatScheduledSummary_TestsPassRatePartial(t *testing.T) {
 			}},
 	}
 	out := FormatScheduledSummary(artefacts, []string{"noble"})
-	if !strings.Contains(out, "pass rate 75%") {
-		t.Errorf("expected pass rate 75%%, got:\n%s", out)
+	if !strings.Contains(out, "75% (3/4)") {
+		t.Errorf("expected 75%% (3/4), got:\n%s", out)
 	}
 	if !strings.Contains(out, "(3/4)") {
 		t.Errorf("expected counts (3/4), got:\n%s", out)
@@ -923,9 +923,9 @@ func TestFormatScheduledSummary_TestsOnlyCountsDisplayable(t *testing.T) {
 			}},
 	}
 	out := FormatScheduledSummary(artefacts, []string{"noble"})
-	// Only Jenkins execution counted → 1/1, pass rate 100%.
-	if !strings.Contains(out, "pass rate 100%") {
-		t.Errorf("expected pass rate 100%% (Image build excluded), got:\n%s", out)
+	// Only Jenkins execution counted → 1/1, 100%.
+	if !strings.Contains(out, "100% (1/1)") {
+		t.Errorf("expected 100%% (1/1) (Image build excluded), got:\n%s", out)
 	}
 	if !strings.Contains(out, "(1/1)") {
 		t.Errorf("expected counts (1/1), got:\n%s", out)

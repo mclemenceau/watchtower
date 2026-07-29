@@ -382,8 +382,8 @@ func FormatScheduledSummary(artefacts []domain.Artefact, releasesScope []string)
 		if total > 0 {
 			buildPct = built * 100 / total
 		}
-		fmt.Fprintf(&sb, "#### %s (%d/%d) %s  · %d%%\n",
-			release, built, total, weather, buildPct)
+		fmt.Fprintf(&sb, "#### %s %s  · %d%% (%d/%d)\n",
+			release, weather, buildPct, built, total)
 
 		if len(infraArts) > 0 {
 			fmt.Fprintf(&sb, "  Infra (%d): %s\n", len(infraArts), formatFailureLine(infraArts))
@@ -622,7 +622,7 @@ func formatTestsSummarySection(
 
 		pct := passed * 100 / total
 		weather := buildWeatherEmoji(passed, total)
-		fmt.Fprintf(&sb, "#### %s %s  · pass rate %d%% (%d/%d)\n",
+		fmt.Fprintf(&sb, "#### %s %s  · %d%% (%d/%d)\n",
 			release, weather, pct, passed, total)
 
 		if failed > 0 {
