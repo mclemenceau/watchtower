@@ -43,6 +43,7 @@ type contextFailure struct {
 	Occurrences        int                     `json:"occurrences"`
 	FailureKind        domain.BuildFailureKind `json:"failure_kind,omitempty"`
 	FailureDescription string                  `json:"failure_description,omitempty"`
+	FailureSignature   string                  `json:"failure_signature,omitempty"`
 	AnalysisCategory   string                  `json:"analysis_category,omitempty"`
 	AnalysisHypothesis string                  `json:"analysis_hypothesis,omitempty"`
 	AnalysisNextAction string                  `json:"analysis_next_action,omitempty"`
@@ -188,6 +189,7 @@ func BuildContext(msg string, artefacts []domain.Artefact, failures domain.Failu
 			Occurrences:        f.Occurrences,
 			FailureKind:        f.FailureKind,
 			FailureDescription: f.FailureDescription,
+			FailureSignature:   f.FailureSignature,
 		}
 		if f.Analysis != nil {
 			cf.AnalysisCategory = f.Analysis.Category

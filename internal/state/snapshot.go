@@ -52,19 +52,27 @@ func (s *Snapshot) Write(artefacts []domain.Artefact) error {
 }
 
 // Diff compares an old snapshot against a fresh fetch and categorises every change.
-// Status vocabulary: APPROVED | MARKED_AS_FAILED | UNDECIDED
-// MARKED_AS_FAILED is treated as the failure state for alerting purposes.
 //
-// NewBuilds is populated when a known artefact's BuildLog transitions to BUILT,
-// covering two cases:
-//  1. The version serial advanced AND the build log is BUILT (build completed in a
-//     new day's serial).
-//  2. The version serial is unchanged but the build log just became BUILT (build
-//     completed within the same serial window — e.g. IN_PROGRESS → BUILT between
-//     two cron runs on the same day).
+// Failure detection uses two independent signals:
 //
-// Artefacts with no prior version (first boot / NewArtefacts) are excluded to
-// avoid bulk noise on startup.
+//  1. Test Observer status transitions (MARKED_AS_FAILED / recovery from it).
+//     This is driven by human review decisions in Test Observer.
+//
+//  2. BuildLog transitions: NOT_STARTED/IN_PROGRESS/BUILT/UNKNOWN → FAILED fires
+//     a NewFailure; FAILED → BUILT fires a Recovery. This is driven by the
+//     cd-build-log enrichment and is the primary signal in practice, since most
+//     artefacts are never explicitly MARKED_AS_FAILED in Test Observer.
+//     Guard: prev.BuildLog must be non-empty (i.e. the prior snapshot was enriched)
+//     to avoid first-boot noise.
+//
+// The two signals are independent — both are checked for every artefact, and each
+// appends to NewFailures/Recoveries independently. An artefact can appear in both
+// buckets only if it has contradictory Status and BuildLog signals, which should
+// not happen in normal operation.
+//
+// NewBuilds is populated when a known artefact's BuildLog transitions to BUILT.
+//
+// Artefacts with no prior snapshot entry land in NewArtefacts.
 func Diff(old, fresh []domain.Artefact) domain.ChangeReport {
 	oldByID := make(map[int]domain.Artefact, len(old))
 	for _, a := range old {
@@ -80,32 +88,60 @@ func Diff(old, fresh []domain.Artefact) domain.ChangeReport {
 			continue
 		}
 
-		// Detect a new successful build. Two conditions trigger this:
-		//   • version advanced (new day's serial) AND build log is BUILT, OR
-		//   • same version but build log just transitioned to BUILT (e.g. IN_PROGRESS
-		//     → BUILT between cron runs on the same day).
-		// In both cases we require a known prior version to exclude first-boot noise.
-		if prev.Version != "" && a.BuildLog == domain.BuildStatusBuilt && prev.BuildLog != domain.BuildStatusBuilt {
+		// NewBuilds: BuildLog transition to BUILT (requires known prior version).
+		if prev.Version != "" &&
+			a.BuildLog == domain.BuildStatusBuilt &&
+			prev.BuildLog != domain.BuildStatusBuilt {
 			report.NewBuilds = append(report.NewBuilds, a)
 		}
 
-		if prev.Status == a.Status {
+		// Signal 1: Test Observer status-based transitions.
+		if prev.Status != a.Status {
+			delta := domain.ArtefactDelta{
+				ArtefactID: a.ID,
+				Name:       a.Name,
+				Release:    a.Release,
+				Version:    a.Version,
+				OldStatus:  prev.Status,
+				NewStatus:  a.Status,
+			}
+			switch {
+			case a.Status == "MARKED_AS_FAILED":
+				report.NewFailures = append(report.NewFailures, delta)
+			case prev.Status == "MARKED_AS_FAILED":
+				report.Recoveries = append(report.Recoveries, delta)
+			default:
+				report.OtherChanges = append(report.OtherChanges, delta)
+			}
+		}
+
+		// Signal 2: BuildLog-based failure/recovery transitions.
+		// Only fires when the prior snapshot had an enriched BuildLog value —
+		// prevents first-boot noise when a stale snapshot has empty BuildLog fields.
+		if prev.BuildLog == "" {
 			continue
 		}
-		delta := domain.ArtefactDelta{
-			Name:      a.Name,
-			Release:   a.Release,
-			Version:   a.Version,
-			OldStatus: prev.Status,
-			NewStatus: a.Status,
+		if prev.BuildLog != domain.BuildStatusFailed &&
+			a.BuildLog == domain.BuildStatusFailed {
+			report.NewFailures = append(report.NewFailures, domain.ArtefactDelta{
+				ArtefactID: a.ID,
+				Name:       a.Name,
+				Release:    a.Release,
+				Version:    a.Version,
+				OldStatus:  string(prev.BuildLog),
+				NewStatus:  string(a.BuildLog),
+			})
 		}
-		switch {
-		case a.Status == "MARKED_AS_FAILED":
-			report.NewFailures = append(report.NewFailures, delta)
-		case prev.Status == "MARKED_AS_FAILED":
-			report.Recoveries = append(report.Recoveries, delta)
-		default:
-			report.OtherChanges = append(report.OtherChanges, delta)
+		if prev.BuildLog == domain.BuildStatusFailed &&
+			a.BuildLog == domain.BuildStatusBuilt {
+			report.Recoveries = append(report.Recoveries, domain.ArtefactDelta{
+				ArtefactID: a.ID,
+				Name:       a.Name,
+				Release:    a.Release,
+				Version:    a.Version,
+				OldStatus:  string(prev.BuildLog),
+				NewStatus:  string(a.BuildLog),
+			})
 		}
 	}
 

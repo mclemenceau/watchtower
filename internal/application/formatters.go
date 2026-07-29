@@ -816,9 +816,14 @@ Failure analysis runs automatically per FAILURE_ANALYSIS_CRON_SCHEDULE (default 
 }
 
 // FormatFailuresSummary renders a compact list of active (unresolved) failures.
-// Records are grouped by release then product. When no failures are found an
-// appropriate message is returned. release and product are used only in the
-// header when non-empty; the caller is responsible for pre-filtering records.
+// Records are grouped by release then product. Within each release/product group,
+// records sharing the same FailureSignature are collapsed into a single block
+// showing all affected artefacts — this surfaces cross-artefact patterns like
+// "apt:missing:libfoo-dev affects 5 stonking builds". Records with no signature
+// fall through to the existing per-record format.
+//
+// release and product are used only in the header when non-empty; the caller is
+// responsible for pre-filtering records.
 func FormatFailuresSummary(records []domain.FailureRecord, release, product string) string {
 	if len(records) == 0 {
 		switch {
@@ -861,22 +866,92 @@ func FormatFailuresSummary(records []domain.FailureRecord, release, product stri
 	for _, k := range order {
 		recs := byKey[k]
 		fmt.Fprintf(&sb, "**%s / %s** — %d failing\n", k.release, k.product, len(recs))
-		for _, r := range recs {
-			occStr := ""
-			if r.Occurrences > 1 {
-				occStr = fmt.Sprintf(" (%d× recurring)", r.Occurrences)
+
+		// Separate records with a signature from those without.
+		bySig := domain.GroupBySignature(recs)
+
+		// Collect and sort signatures for deterministic output.
+		sigs := make([]string, 0, len(bySig))
+		for sig := range bySig {
+			sigs = append(sigs, sig)
+		}
+		sort.Strings(sigs)
+
+		for _, sig := range sigs {
+			group := bySig[sig]
+			if sig == "" {
+				// No signature — render per-record as before.
+				for _, r := range group {
+					sb.WriteString(formatFailureRecord(r))
+				}
+				continue
 			}
-			analysisStr := " _(analysis pending)_"
-			if r.Analysis != nil {
-				analysisStr = fmt.Sprintf(" — %s: %s", r.Analysis.Category, r.Analysis.Hypothesis)
-			} else if r.FailureKind != "" && r.FailureDescription != "" {
-				analysisStr = fmt.Sprintf(" — %s: %s", r.FailureKind, r.FailureDescription)
+			// Shared signature — render as a grouped block.
+			if len(group) == 1 {
+				// Only one artefact with this signature; inline it.
+				r := group[0]
+				occStr := ""
+				if r.Occurrences > 1 {
+					occStr = fmt.Sprintf(" (%d× recurring)", r.Occurrences)
+				}
+				fmt.Fprintf(&sb, " - **%s**%s — `%s`", r.ArtefactName, occStr, sig)
+				if r.Analysis != nil && r.Analysis.NextAction != "" {
+					fmt.Fprintf(&sb, " → %s", r.Analysis.NextAction)
+				}
+				sb.WriteString("\n")
+				continue
 			}
-			fmt.Fprintf(&sb, " - **%s**%s%s\n", r.ArtefactName, occStr, analysisStr)
+			// Multiple artefacts share the same root cause.
+			var hypothesis, nextAction string
+			for _, r := range group {
+				if r.Analysis != nil {
+					if hypothesis == "" {
+						hypothesis = r.Analysis.Hypothesis
+					}
+					if nextAction == "" {
+						nextAction = r.Analysis.NextAction
+					}
+				}
+			}
+			fmt.Fprintf(&sb, " - `%s` — %d artefacts affected\n", sig, len(group))
+			for _, r := range group {
+				occStr := ""
+				if r.Occurrences > 1 {
+					occStr = fmt.Sprintf(" (%d×)", r.Occurrences)
+				}
+				fmt.Fprintf(&sb, "   - %s%s\n", r.ArtefactName, occStr)
+			}
+			if hypothesis != "" {
+				fmt.Fprintf(&sb, "   Hypothesis: %s\n", hypothesis)
+			}
+			if nextAction != "" {
+				fmt.Fprintf(&sb, "   Next action: %s\n", nextAction)
+			}
 		}
 		sb.WriteString("\n")
 	}
 	return sb.String()
+}
+
+// formatFailureRecord renders a single FailureRecord line for use in the
+// no-signature path of FormatFailuresSummary.
+func formatFailureRecord(r domain.FailureRecord) string {
+	occStr := ""
+	if r.Occurrences > 1 {
+		occStr = fmt.Sprintf(" (%d× recurring)", r.Occurrences)
+	}
+	var analysisStr string
+	switch {
+	case r.Analysis != nil:
+		analysisStr = fmt.Sprintf(" — %s: %s", r.Analysis.Category, r.Analysis.Hypothesis)
+	case r.FailureKind != "" && r.FailureDescription != "":
+		analysisStr = fmt.Sprintf(" — %s: %s", r.FailureKind, r.FailureDescription)
+	case r.FailureKind != "":
+		analysisStr = fmt.Sprintf(" — %s", r.FailureKind)
+	default:
+		analysisStr = " _(analysis pending)_"
+	}
+	return fmt.Sprintf(" - **%s**%s%s\n", r.ArtefactName, occStr, analysisStr)
 }
 
 // FormatFailureDetail renders the full detail for a single FailureRecord,

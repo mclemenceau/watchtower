@@ -5,6 +5,7 @@ package domain
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -146,17 +147,19 @@ type ChangeReport struct {
 
 // ArtefactDelta represents one artefact's status transition between snapshots.
 type ArtefactDelta struct {
-	Name      string `json:"name"`
-	Release   string `json:"release"`
-	Version   string `json:"version"`
-	OldStatus string `json:"old_status"`
-	NewStatus string `json:"new_status"`
+	ArtefactID int    `json:"artefact_id"` // set when known; enables exact lookup avoiding name collisions
+	Name       string `json:"name"`
+	Release    string `json:"release"`
+	Version    string `json:"version"`
+	OldStatus  string `json:"old_status"`
+	NewStatus  string `json:"new_status"`
 }
 
 // LogAnalysis is the structured output from an LLM log analysis.
 type LogAnalysis struct {
 	Category    string   `json:"category"` // infra|code|dependency|flaky|unknown
 	Hypothesis  string   `json:"hypothesis"`
+	Signature   string   `json:"signature,omitempty"` // canonical slug e.g. "apt:missing:libfoo-dev"
 	LogExcerpts []string `json:"log_excerpts"`
 	NextAction  string   `json:"next_action"`
 }
@@ -174,7 +177,8 @@ type FailureRecord struct {
 	LastSeenVersion    string           `json:"last_seen_version"`             // YYYYMMDD of most recent failure
 	Occurrences        int              `json:"occurrences"`                   // increments each new failing version
 	FailureKind        BuildFailureKind `json:"failure_kind,omitempty"`        // INFRA | PRODUCT — deterministic classification from log parsing
-	FailureDescription string           `json:"failure_description,omitempty"` // short human-readable reason; for PRODUCT failures set to placeholder pending LLM analysis
+	FailureDescription string           `json:"failure_description,omitempty"` // short human-readable reason
+	FailureSignature   string           `json:"failure_signature,omitempty"`   // canonical slug from ExtractFailureSignature or LLM; enables cross-artefact grouping
 	Analysis           *LogAnalysis     `json:"analysis,omitempty"`            // nil until FailureAnalysisWorkflow runs
 	AnalysedVersion    string           `json:"analysed_version,omitempty"`    // version the analysis was done on
 	AnalysedAt         *time.Time       `json:"analysed_at,omitempty"`
@@ -301,7 +305,9 @@ func (fs FailureStore) PendingAnalysis(max int) []FailureRecord {
 }
 
 // SetAnalysis stores a completed LogAnalysis on the record matching artefactID
-// in the given release+product bucket.
+// in the given release+product bucket. The Signature field is also promoted to
+// FailureSignature on the record to enable cross-artefact grouping queries
+// without having to dereference Analysis.
 func (fs FailureStore) SetAnalysis(artefactID int, release, product string, analysis LogAnalysis, version string) {
 	records := fs[release][product]
 	now := time.Now().UTC()
@@ -310,6 +316,9 @@ func (fs FailureStore) SetAnalysis(artefactID int, release, product string, anal
 			records[i].Analysis = &analysis
 			records[i].AnalysedVersion = version
 			records[i].AnalysedAt = &now
+			if analysis.Signature != "" {
+				records[i].FailureSignature = analysis.Signature
+			}
 		}
 	}
 	if fs[release] != nil {
@@ -793,8 +802,7 @@ func ParseBuildStatusFromLog(logContent, arch string) (BuildStatusState, BuildFa
 		// "(Failed to build)" or any other non-success suffix: Phase 2 product failure.
 		// A run_live_builds traceback may also be present (e.g. LiveBuildsFailed raised
 		// because this arch failed), but the arch-specific LP result takes precedence.
-		return BuildStatusFailed, BuildFailureKindProduct,
-			"livefs build failure requires analysis"
+		return BuildStatusFailed, BuildFailureKindProduct, ""
 	}
 }
 
@@ -838,4 +846,78 @@ func hasAnyTraceback(logContent string) bool {
 // step encountered an error (e.g. Test Observer returned a 5xx response).
 func hasTestObserverSubmitFailure(logContent string) bool {
 	return strings.Contains(logContent, "Couldn't submit artifact to Test Observer")
+}
+
+// signaturePattern pairs a compiled regexp with the template used to build the
+// canonical signature slug. Capture group 1 (when present) is substituted for
+// "$1" in the template.
+type signaturePattern struct {
+	re       *regexp.Regexp
+	template string // use $1 to include the first capture group
+}
+
+// signaturePatterns is the ordered priority list used by ExtractFailureSignature.
+// Patterns are checked top-to-bottom; the first match wins.
+var signaturePatterns = []signaturePattern{
+	// dpkg errors — most specific first so we don't fall through to sub-process error
+	{regexp.MustCompile(`dpkg: error processing package (\S+)`), "dpkg:$1"},
+	{regexp.MustCompile(`dpkg-deb: error:`), "dpkg-deb:error"},
+	{regexp.MustCompile(`Sub-process /usr/bin/dpkg returned an error`), "dpkg:subprocess-error"},
+	// apt errors
+	{regexp.MustCompile(`E: Unable to locate package (\S+)`), "apt:missing:$1"},
+	{regexp.MustCompile(`E: Package '(\S+)' has no installation candidate`), "apt:no-candidate:$1"},
+	{regexp.MustCompile(`(\S+) : Depends:`), "apt:unmet-dep:$1"},
+	{regexp.MustCompile(`Cannot initiate the connection to|Temporary failure resolving`), "apt:network-error"},
+	// snap errors
+	{regexp.MustCompile(`error: cannot install '(\S+)'`), "snap:install:$1"},
+	{regexp.MustCompile(`error: snap "(\S+)"`), "snap:$1"},
+	// debootstrap
+	{regexp.MustCompile(`debootstrap: `), "debootstrap:error"},
+}
+
+// ExtractFailureSignature scans the last 200 lines of logContent for known
+// PRODUCT build-failure patterns and returns a short canonical slug
+// (e.g. "apt:missing:libfoo-dev", "dpkg:libbar") that can be used to group
+// multiple failing artefacts sharing the same root cause.
+//
+// Returns "" when no known pattern is matched. Callers should fall back to
+// LLM analysis in that case.
+//
+// The function is pure (no I/O) and safe for concurrent use.
+func ExtractFailureSignature(logContent string) string {
+	// Work on the last 200 lines to match the same window the LLM sees.
+	lines := strings.Split(logContent, "\n")
+	if len(lines) > 200 {
+		lines = lines[len(lines)-200:]
+	}
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		for _, p := range signaturePatterns {
+			m := p.re.FindStringSubmatch(line)
+			if m == nil {
+				continue
+			}
+			sig := p.template
+			if len(m) > 1 {
+				// Strip trailing punctuation from the captured package name
+				// so "libfoo-dev," and "libfoo-dev" both produce the same slug.
+				pkg := strings.TrimRight(m[1], ",:;()")
+				sig = strings.ReplaceAll(sig, "$1", pkg)
+			}
+			return sig
+		}
+	}
+	return ""
+}
+
+// GroupBySignature groups active FailureRecords by their FailureSignature.
+// Records with an empty FailureSignature are placed under the "" key.
+// The returned map is never nil.
+func GroupBySignature(records []FailureRecord) map[string][]FailureRecord {
+	out := make(map[string][]FailureRecord)
+	for _, r := range records {
+		out[r.FailureSignature] = append(out[r.FailureSignature], r)
+	}
+	return out
 }

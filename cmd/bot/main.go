@@ -123,7 +123,12 @@ func main() {
 	// Start the cron workflows (idempotent — Temporal ignores if already running).
 	startDataRefreshWorkflow(c, cfg.RefreshCronSchedule)
 	startSummaryPostWorkflow(c, cfg.SummaryCronSchedule)
-	startFailureAnalysisWorkflow(c, cfg.FailureAnalysisCronSchedule)
+	// The failure analysis sweep is disabled by default (empty schedule) — analysis
+	// is triggered inline by DataRefreshWorkflow when new PRODUCT failures are detected.
+	// Set FAILURE_ANALYSIS_CRON_SCHEDULE to re-enable the periodic sweep.
+	if cfg.FailureAnalysisCronSchedule != "" {
+		startFailureAnalysisWorkflow(c, cfg.FailureAnalysisCronSchedule)
+	}
 
 	// If the snapshot is empty (first boot), trigger an immediate fetch.
 	triggerInitialFetch(c, snap)

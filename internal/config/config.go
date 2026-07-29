@@ -32,8 +32,8 @@ type Config struct {
 	// Cron schedules for the background workflows
 	RefreshCronSchedule         string // dataset refresh interval (default every 30 min)
 	SummaryCronSchedule         string // when to post the scheduled build summary (default 07:00/15:00/23:00 UTC)
-	FailureAnalysisCronSchedule string // when to run LLM failure analysis (default every 8 h)
-	MaxFailuresPerAnalysisRun   int    // LLM call cap per analysis run (default 5)
+	FailureAnalysisCronSchedule string // sweep schedule for any still-pending analysis (default empty = disabled)
+	MaxFailuresPerAnalysisRun   int    // LLM call cap per analysis run (default 20)
 }
 
 func Load() (*Config, error) {
@@ -47,7 +47,7 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	maxFailures, err := parseIntEnv("MAX_FAILURES_PER_ANALYSIS_RUN", 5)
+	maxFailures, err := parseIntEnv("MAX_FAILURES_PER_ANALYSIS_RUN", 20)
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +66,7 @@ func Load() (*Config, error) {
 		LLMModel:                    envOrDefault("LLM_MODEL", "openai/gpt-4o-mini"),
 		RefreshCronSchedule:         envOrDefault("REFRESH_CRON_SCHEDULE", "*/30 * * * *"),
 		SummaryCronSchedule:         envOrDefault("SUMMARY_CRON_SCHEDULE", "0 7,15,23 * * *"),
-		FailureAnalysisCronSchedule: envOrDefault("FAILURE_ANALYSIS_CRON_SCHEDULE", "0 */8 * * *"),
+		FailureAnalysisCronSchedule: os.Getenv("FAILURE_ANALYSIS_CRON_SCHEDULE"), // empty = disabled; set to re-enable sweep
 		MaxFailuresPerAnalysisRun:   maxFailures,
 	}, nil
 }

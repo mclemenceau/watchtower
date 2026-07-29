@@ -293,16 +293,12 @@ func (a *Activities) SaveFailures(_ context.Context, store domain.FailureStore) 
 
 // UpdateFailureRecords merges a ChangeReport into the persisted FailureStore:
 //   - NewFailures  → upsert (create or increment occurrences)
-//   - NewArtefacts → upsert when already MARKED_AS_FAILED (first-boot seeding)
-//   - Recoveries   → mark resolved (silently, no notification per spec)
+//   - NewArtefacts → upsert when already MARKED_AS_FAILED or BuildLog==FAILED (first-boot seeding)
+//   - Recoveries   → mark resolved
 //
-// The artefacts slice is used to look up Release and OS for each delta, since
-// ArtefactDelta only carries Name/Release/Version, not OS/product.
-// NewArtefacts handling is critical for the first-boot case: when Watchtower
-// starts with an empty failures.json but a snapshot that already contains
-// MARKED_AS_FAILED artefacts, Diff produces NewArtefacts (not NewFailures)
-// because there is no previous status to transition from. Without this path
-// those failures would never be recorded.
+// Lookups use ArtefactDelta.ArtefactID when non-zero; this avoids the name-collision
+// problem where multiple artefacts share the same name (e.g. "noble-desktop-amd64.iso"
+// appears in several different flavour families).
 func (a *Activities) UpdateFailureRecords(_ context.Context, report domain.ChangeReport, artefacts []domain.Artefact) error {
 	if a.Failures == nil {
 		return nil
@@ -313,31 +309,43 @@ func (a *Activities) UpdateFailureRecords(_ context.Context, report domain.Chang
 		return fmt.Errorf("UpdateFailureRecords: read: %w", err)
 	}
 
-	// Build a quick name→artefact index (name is unique enough for this purpose).
+	// Build an ID-keyed index; fall back to name for deltas without an ID.
+	byID := make(map[int]domain.Artefact, len(artefacts))
 	byName := make(map[string]domain.Artefact, len(artefacts))
 	for _, art := range artefacts {
-		byName[art.Name] = art
+		byID[art.ID] = art
+		byName[art.Name] = art // last writer wins for name; only used as fallback
+	}
+
+	lookup := func(delta domain.ArtefactDelta) (domain.Artefact, bool) {
+		if delta.ArtefactID != 0 {
+			art, ok := byID[delta.ArtefactID]
+			return art, ok
+		}
+		art, ok := byName[delta.Name]
+		return art, ok
 	}
 
 	for _, delta := range report.NewFailures {
-		art, ok := byName[delta.Name]
+		art, ok := lookup(delta)
 		if !ok {
 			continue
 		}
 		store.UpsertFailure(art)
 	}
 
-	// Seed failures for brand-new artefacts that are already MARKED_AS_FAILED.
-	// This covers the first-boot case where no old snapshot exists so Diff
-	// cannot observe a status transition.
+	// Seed failures for brand-new artefacts that are already MARKED_AS_FAILED
+	// or have a FAILED BuildLog. This covers the first-boot case: Diff has no
+	// prior snapshot to transition from, so failed artefacts land in NewArtefacts
+	// rather than NewFailures.
 	for _, art := range report.NewArtefacts {
-		if art.Status == "MARKED_AS_FAILED" {
+		if art.Status == "MARKED_AS_FAILED" || art.BuildLog == domain.BuildStatusFailed {
 			store.UpsertFailure(art)
 		}
 	}
 
 	for _, delta := range report.Recoveries {
-		art, ok := byName[delta.Name]
+		art, ok := lookup(delta)
 		if !ok {
 			continue
 		}

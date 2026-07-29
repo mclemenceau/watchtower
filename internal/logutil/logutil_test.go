@@ -1,7 +1,10 @@
 package logutil
 
 import (
+	"context"
 	"testing"
+
+	"github.com/mclemenceau/watchtower/internal/domain"
 )
 
 // --- MatchLaunchpadURL ---
@@ -114,5 +117,100 @@ func TestStripCodeFence_EmptyString(t *testing.T) {
 	got := StripCodeFence("")
 	if got != "" {
 		t.Errorf("StripCodeFence empty: got %q, want empty", got)
+	}
+}
+
+// --- AnalyzeLog short-circuit ---
+
+// panicLLM is a ports.LLMClient that panics if Complete is ever called.
+// Used to verify that the LLM is NOT called when a known signature is found.
+type panicLLM struct{}
+
+func (p *panicLLM) Complete(_ context.Context, _, _ string) (string, error) {
+	panic("LLM should not be called when signature is found")
+}
+
+// mockLogFetcher returns a fixed log content without any network call.
+type mockLogFetcher struct{ content string }
+
+func (m *mockLogFetcher) Fetch(_ context.Context, _ string) (string, error) {
+	return m.content, nil
+}
+
+func TestAnalyzeLog_ShortCircuit_NoLLMCall(t *testing.T) {
+	// A log containing a known apt:missing pattern should produce a result
+	// without calling the LLM at all.
+	logContent := "E: Unable to locate package libfoo-dev\nsome other line"
+	art := domain.Artefact{
+		ID:       1,
+		Name:     "stonking-desktop-amd64.iso",
+		ImageURL: "https://cdimage.ubuntu.com/ubuntu/stonking/daily-live/20260701/stonking-desktop-amd64.iso",
+	}
+
+	analysis, src, err := AnalyzeLog(
+		context.Background(),
+		art,
+		&mockLogFetcher{content: logContent},
+		nil,         // no Launchpad resolver
+		&panicLLM{}, // panics if called — proves short-circuit
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if analysis.Signature != "apt:missing:libfoo-dev" {
+		t.Errorf("Signature = %q, want apt:missing:libfoo-dev", analysis.Signature)
+	}
+	if analysis.Category != "dependency" {
+		t.Errorf("Category = %q, want dependency", analysis.Category)
+	}
+	if src.Description == "" {
+		t.Error("LogSource.Description should not be empty")
+	}
+}
+
+func TestInferCategory_Apt(t *testing.T) {
+	if got := inferCategory("apt:missing:libfoo"); got != "dependency" {
+		t.Errorf("inferCategory(apt:*) = %q, want dependency", got)
+	}
+}
+
+func TestInferCategory_Dpkg(t *testing.T) {
+	if got := inferCategory("dpkg:subprocess-error"); got != "dependency" {
+		t.Errorf("inferCategory(dpkg:*) = %q, want dependency", got)
+	}
+}
+
+func TestInferCategory_Snap(t *testing.T) {
+	if got := inferCategory("snap:install:core24"); got != "dependency" {
+		t.Errorf("inferCategory(snap:*) = %q, want dependency", got)
+	}
+}
+
+func TestInferCategory_Debootstrap(t *testing.T) {
+	if got := inferCategory("debootstrap:error"); got != "infra" {
+		t.Errorf("inferCategory(debootstrap:*) = %q, want infra", got)
+	}
+}
+
+func TestInferCategory_Unknown(t *testing.T) {
+	if got := inferCategory("something:else"); got != "unknown" {
+		t.Errorf("inferCategory(other) = %q, want unknown", got)
+	}
+}
+
+func TestMatchingLines_ReturnsRelevantLines(t *testing.T) {
+	content := "normal line\nE: Unable to locate package libfoo-dev\nanother line\nmore apt output"
+	lines := matchingLines(content, "apt:missing:libfoo-dev")
+	if len(lines) == 0 {
+		t.Error("expected at least one matching line")
+	}
+	found := false
+	for _, l := range lines {
+		if l == "E: Unable to locate package libfoo-dev" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected exact error line in excerpts, got %v", lines)
 	}
 }

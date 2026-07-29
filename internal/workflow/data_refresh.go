@@ -15,6 +15,11 @@ import (
 // or recoveries detected in the diff, and posts a compact notification when
 // one or more artefacts have a new successful build since the previous snapshot.
 //
+// When new PRODUCT or UNKNOWN build failures are detected, AnalyseFailures is
+// run inline immediately after UpdateFailureRecords so that the LLM analysis
+// (or deterministic signature extraction) happens as soon as the failure is
+// recorded — rather than waiting for the next scheduled analysis cron window.
+//
 // Intended to run on a frequent cron schedule (e.g. every 30 min via
 // REFRESH_CRON_SCHEDULE).
 func DataRefreshWorkflow(ctx sdk.Context) error {
@@ -65,16 +70,28 @@ func DataRefreshWorkflow(ctx sdk.Context) error {
 		return err
 	}
 
-	// 5. Diff old vs fresh and update the failure store (upsert new failures,
-	//    mark recoveries as resolved). This is deterministic and cheap — no LLM.
-	// Also run when there are new artefacts: some may already be MARKED_AS_FAILED
-	// (first-boot seeding — Diff has no old status to transition from so they
-	// appear as NewArtefacts rather than NewFailures).
+	// 5. Diff old vs fresh and update the failure store.
 	report := state.Diff(old, enriched)
-	if len(report.NewFailures) > 0 || len(report.Recoveries) > 0 || len(report.NewArtefacts) > 0 {
+	hasFailureChanges := len(report.NewFailures) > 0 ||
+		len(report.Recoveries) > 0 ||
+		len(report.NewArtefacts) > 0
+	if hasFailureChanges {
 		if err := sdk.ExecuteActivity(ctx, act.UpdateFailureRecords, report, enriched).Get(ctx, nil); err != nil {
 			// Non-fatal: failure store update failing should not abort the refresh.
 			sdk.GetLogger(ctx).Warn("UpdateFailureRecords failed", "error", err)
+		}
+
+		// 5.5. If any new PRODUCT or UNKNOWN failures were just recorded, run
+		// LLM/signature analysis inline so results are available immediately
+		// rather than waiting for the next scheduled analysis window.
+		// Non-fatal: an analysis failure should not abort the data refresh.
+		if hasNewProductFailures(report, enriched) {
+			analysisCtx := sdk.WithActivityOptions(ctx, sdk.ActivityOptions{
+				StartToCloseTimeout: 10 * time.Minute,
+			})
+			if err := sdk.ExecuteActivity(analysisCtx, act.AnalyseFailures, enriched).Get(analysisCtx, nil); err != nil {
+				sdk.GetLogger(ctx).Warn("AnalyseFailures failed", "error", err)
+			}
 		}
 	}
 
@@ -90,4 +107,28 @@ func DataRefreshWorkflow(ctx sdk.Context) error {
 	}
 
 	return nil
+}
+
+// hasNewProductFailures reports whether any delta in report.NewFailures
+// corresponds to an artefact with a PRODUCT or UNKNOWN BuildFailureKind —
+// i.e. failures that benefit from log analysis (INFRA failures already have
+// a deterministic description).
+func hasNewProductFailures(report domain.ChangeReport, artefacts []domain.Artefact) bool {
+	byID := make(map[int]domain.Artefact, len(artefacts))
+	for _, a := range artefacts {
+		byID[a.ID] = a
+	}
+	for _, delta := range report.NewFailures {
+		art, ok := byID[delta.ArtefactID]
+		if !ok {
+			continue
+		}
+		switch art.BuildFailureKind {
+		case domain.BuildFailureKindProduct, domain.BuildFailureKindUnknown, domain.BuildFailureKindNone:
+			// PRODUCT and UNKNOWN need analysis; BuildFailureKindNone means the
+			// kind hasn't been determined yet — include it to be safe.
+			return true
+		}
+	}
+	return false
 }

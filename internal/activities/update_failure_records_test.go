@@ -112,3 +112,76 @@ func TestUpdateFailureRecords_NewArtefactNotFailed(t *testing.T) {
 		t.Errorf("expected no failures for non-failed new artefact, got %d", len(active))
 	}
 }
+
+// TestUpdateFailureRecords_ByID verifies that lookup uses ArtefactID when set,
+// correctly handling artefacts that share the same name (different flavour families).
+func TestUpdateFailureRecords_ByID(t *testing.T) {
+	fs := &inMemoryFailureStore{}
+	act := &Activities{Failures: fs}
+
+	// Two artefacts with the same name but different IDs (real-world situation:
+	// noble-desktop-amd64.iso appears in ubuntu, kubuntu, xubuntu, etc.)
+	art1 := domain.Artefact{
+		ID: 100, Name: "noble-desktop-amd64.iso",
+		OS: "ubuntu", Release: "noble", Version: "20260729",
+		BuildLog: domain.BuildStatusFailed, BuildFailureKind: domain.BuildFailureKindProduct,
+	}
+	art2 := domain.Artefact{
+		ID: 200, Name: "noble-desktop-amd64.iso",
+		OS: "kubuntu", Release: "noble", Version: "20260729",
+		BuildLog: domain.BuildStatusFailed, BuildFailureKind: domain.BuildFailureKindProduct,
+	}
+
+	report := domain.ChangeReport{
+		NewFailures: []domain.ArtefactDelta{
+			{ArtefactID: 100, Name: art1.Name, Release: art1.Release},
+			{ArtefactID: 200, Name: art2.Name, Release: art2.Release},
+		},
+	}
+
+	if err := act.UpdateFailureRecords(context.Background(), report, []domain.Artefact{art1, art2}); err != nil {
+		t.Fatalf("UpdateFailureRecords: %v", err)
+	}
+
+	// Both must be recorded — ID-based lookup prevents one from shadowing the other.
+	ubuntuActive := fs.store.ActiveFailures("noble", "ubuntu")
+	if len(ubuntuActive) != 1 {
+		t.Errorf("expected 1 ubuntu failure, got %d", len(ubuntuActive))
+	}
+	kubuntuActive := fs.store.ActiveFailures("noble", "kubuntu")
+	if len(kubuntuActive) != 1 {
+		t.Errorf("expected 1 kubuntu failure, got %d", len(kubuntuActive))
+	}
+}
+
+// TestUpdateFailureRecords_FirstBootBuildLogFailed verifies that brand-new
+// artefacts with BuildLog==FAILED are seeded into the failure store on first boot,
+// even when their Status is UNDECIDED (not MARKED_AS_FAILED).
+func TestUpdateFailureRecords_FirstBootBuildLogFailed(t *testing.T) {
+	fs := &inMemoryFailureStore{}
+	act := &Activities{Failures: fs}
+
+	art := domain.Artefact{
+		ID: 42, Name: "stonking-server-amd64.iso",
+		OS: "ubuntu-server", Release: "stonking", Version: "20260725",
+		Status:           "UNDECIDED",
+		BuildLog:         domain.BuildStatusFailed,
+		BuildFailureKind: domain.BuildFailureKindProduct,
+	}
+	// First boot: Diff produces NewArtefacts, not NewFailures.
+	report := domain.ChangeReport{
+		NewArtefacts: []domain.Artefact{art},
+	}
+
+	if err := act.UpdateFailureRecords(context.Background(), report, []domain.Artefact{art}); err != nil {
+		t.Fatalf("UpdateFailureRecords: %v", err)
+	}
+
+	active := fs.store.ActiveFailures("stonking", "ubuntu-server")
+	if len(active) != 1 {
+		t.Fatalf("expected BuildLog==FAILED artefact seeded from NewArtefacts, got %d", len(active))
+	}
+	if active[0].ArtefactName != "stonking-server-amd64.iso" {
+		t.Errorf("unexpected artefact name: %s", active[0].ArtefactName)
+	}
+}

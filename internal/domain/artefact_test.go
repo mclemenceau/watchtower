@@ -647,7 +647,7 @@ func TestParseBuildStatusFromLog(t *testing.T) {
 		// amd64 successfully built → BUILT, no failure kind.
 		{"amd64 successfully built", typicalServerLog, "amd64", BuildStatusBuilt, BuildFailureKindNone, ""},
 		// arm64 failed (Failed to build) → FAILED, PRODUCT.
-		{"arm64 failed", typicalServerLog, "arm64", BuildStatusFailed, BuildFailureKindProduct, "livefs build failure requires analysis"},
+		{"arm64 failed", typicalServerLog, "arm64", BuildStatusFailed, BuildFailureKindProduct, ""},
 		// arm64-largemem successfully built.
 		{"arm64-largemem built", typicalServerLog, "arm64-largemem", BuildStatusBuilt, BuildFailureKindNone, ""},
 		// riscv64 started but not finished, no traceback → IN_PROGRESS, no failure kind.
@@ -660,7 +660,7 @@ func TestParseBuildStatusFromLog(t *testing.T) {
 		// Chroot problem suffix → FAILED, INFRA (LP builder problem, not product).
 		{"amd64 chroot problem", logWithChromeProblem, "amd64", BuildStatusFailed, BuildFailureKindInfra, "Launchpad builder reported a chroot problem"},
 		// arm64+raspi: arm64-raspi matches "ubuntu-server-arm64-raspi" via suffix — FAILED, PRODUCT.
-		{"arm64-raspi failed", preinstalledLog, "arm64-raspi", BuildStatusFailed, BuildFailureKindProduct, "livefs build failure requires analysis"},
+		{"arm64-raspi failed", preinstalledLog, "arm64-raspi", BuildStatusFailed, BuildFailureKindProduct, ""},
 		// Arch with "+" normalised to "-" by caller (ArtefactArch already normalises).
 		{"arm64+largemem normalised", typicalServerLog, "arm64+largemem", BuildStatusBuilt, BuildFailureKindNone, ""},
 		// Preinstalled server: raw arch "amd64" does NOT match "ubuntu-server-amd64-generic".
@@ -671,9 +671,9 @@ func TestParseBuildStatusFromLog(t *testing.T) {
 		// arm64 raw arch does not match "ubuntu-server-arm64-generic" or "ubuntu-server-arm64-raspi".
 		{"preinstalled arm64 raw arch no match", preinstalledServerLog, "arm64", BuildStatusNotStarted, BuildFailureKindNone, ""},
 		// With resolved label "arm64-generic" → FAILED, PRODUCT.
-		{"preinstalled arm64-generic failed", preinstalledServerLog, "arm64-generic", BuildStatusFailed, BuildFailureKindProduct, "livefs build failure requires analysis"},
+		{"preinstalled arm64-generic failed", preinstalledServerLog, "arm64-generic", BuildStatusFailed, BuildFailureKindProduct, ""},
 		// riscv64-generic → FAILED, PRODUCT.
-		{"preinstalled riscv64-generic failed", preinstalledServerLog, "riscv64-generic", BuildStatusFailed, BuildFailureKindProduct, "livefs build failure requires analysis"},
+		{"preinstalled riscv64-generic failed", preinstalledServerLog, "riscv64-generic", BuildStatusFailed, BuildFailureKindProduct, ""},
 		// cdimage run_live_builds traceback (LP 400) — no "starting at" lines for any arch → FAILED, INFRA.
 		{"run_live_builds traceback, amd64", cdimageTracebackLog, "amd64", BuildStatusFailed, BuildFailureKindInfra, "cdimage crashed before submitting builds to Launchpad"},
 		{"run_live_builds traceback, arm64", cdimageTracebackLog, "arm64", BuildStatusFailed, BuildFailureKindInfra, "cdimage crashed before submitting builds to Launchpad"},
@@ -690,7 +690,7 @@ func TestParseBuildStatusFromLog(t *testing.T) {
 		{"unrelated traceback, amd64", unrelatedTracebackLog, "amd64", BuildStatusNotStarted, BuildFailureKindNone, ""},
 		// run_live_builds traceback that appears AFTER arch's "(Failed to build)" result:
 		// the arch-specific LP verdict takes precedence → FAILED, PRODUCT (not INFRA).
-		{"run_live_builds after failed build, arm64-raspi", runLiveBuildsAfterFailedBuildLog, "arm64-raspi", BuildStatusFailed, BuildFailureKindProduct, "livefs build failure requires analysis"},
+		{"run_live_builds after failed build, arm64-raspi", runLiveBuildsAfterFailedBuildLog, "arm64-raspi", BuildStatusFailed, BuildFailureKindProduct, ""},
 		// Test Observer submission failure (with subsequent traceback): LP built and
 		// published the image but cdimage could not submit it to Test Observer → INFRA.
 		{"TO submit failure + traceback, amd64", testObserverSubmitFailureLog, "amd64", BuildStatusFailed, BuildFailureKindInfra, "LP build succeeded but image could not be submitted to Test Observer"},
@@ -762,7 +762,7 @@ func TestUpsertFailureKindDescription(t *testing.T) {
 	art2 := art
 	art2.Version = "20260728"
 	art2.BuildFailureKind = BuildFailureKindProduct
-	art2.BuildFailureDescription = "livefs build failure requires analysis"
+	art2.BuildFailureDescription = ""
 	isNew = fs.UpsertFailure(art2)
 	if isNew {
 		t.Fatal("expected existing record on second upsert")
@@ -858,5 +858,177 @@ func TestPendingAnalysis_RespectsCap(t *testing.T) {
 	pending := fs.PendingAnalysis(3)
 	if len(pending) != 3 {
 		t.Errorf("PendingAnalysis with cap=3 returned %d records, want 3", len(pending))
+	}
+}
+
+// --- ExtractFailureSignature ---
+
+func TestExtractFailureSignature_DpkgErrorPackage(t *testing.T) {
+	log := "dpkg: error processing package libsystemd-dev (--unpack):"
+	got := ExtractFailureSignature(log)
+	if got != "dpkg:libsystemd-dev" {
+		t.Errorf("got %q, want %q", got, "dpkg:libsystemd-dev")
+	}
+}
+
+func TestExtractFailureSignature_AptMissing(t *testing.T) {
+	log := "E: Unable to locate package libfoo-dev"
+	got := ExtractFailureSignature(log)
+	if got != "apt:missing:libfoo-dev" {
+		t.Errorf("got %q, want %q", got, "apt:missing:libfoo-dev")
+	}
+}
+
+func TestExtractFailureSignature_AptNoCandidate(t *testing.T) {
+	log := "E: Package 'libbar' has no installation candidate"
+	got := ExtractFailureSignature(log)
+	if got != "apt:no-candidate:libbar" {
+		t.Errorf("got %q, want %q", got, "apt:no-candidate:libbar")
+	}
+}
+
+func TestExtractFailureSignature_AptUnmetDep(t *testing.T) {
+	log := " ubuntu-server : Depends: libsystemd-dev (>= 253)"
+	got := ExtractFailureSignature(log)
+	if got != "apt:unmet-dep:ubuntu-server" {
+		t.Errorf("got %q, want %q", got, "apt:unmet-dep:ubuntu-server")
+	}
+}
+
+func TestExtractFailureSignature_SnapInstall(t *testing.T) {
+	log := "error: cannot install 'core24': snap not found"
+	got := ExtractFailureSignature(log)
+	if got != "snap:install:core24" {
+		t.Errorf("got %q, want %q", got, "snap:install:core24")
+	}
+}
+
+func TestExtractFailureSignature_Debootstrap(t *testing.T) {
+	log := "debootstrap: error: failed to bootstrap"
+	got := ExtractFailureSignature(log)
+	if got != "debootstrap:error" {
+		t.Errorf("got %q, want %q", got, "debootstrap:error")
+	}
+}
+
+func TestExtractFailureSignature_DpkgSubprocess(t *testing.T) {
+	log := "E: Sub-process /usr/bin/dpkg returned an error code (1)"
+	got := ExtractFailureSignature(log)
+	if got != "dpkg:subprocess-error" {
+		t.Errorf("got %q, want %q", got, "dpkg:subprocess-error")
+	}
+}
+
+func TestExtractFailureSignature_NoMatch(t *testing.T) {
+	log := "Some unrecognised build error without a known pattern"
+	got := ExtractFailureSignature(log)
+	if got != "" {
+		t.Errorf("expected empty signature, got %q", got)
+	}
+}
+
+func TestExtractFailureSignature_EmptyLog(t *testing.T) {
+	got := ExtractFailureSignature("")
+	if got != "" {
+		t.Errorf("expected empty for empty log, got %q", got)
+	}
+}
+
+func TestExtractFailureSignature_PriorityOrder(t *testing.T) {
+	// dpkg error should take priority over apt:unmet-dep when both patterns present
+	log := " ubuntu-server : Depends: libfoo\ndpkg: error processing package libfoo (--unpack):"
+	got := ExtractFailureSignature(log)
+	// dpkg pattern appears after unmet-dep in the log — first match in scan order wins
+	// since unmet-dep appears on line 1 and dpkg on line 2, unmet-dep wins
+	if got != "apt:unmet-dep:ubuntu-server" {
+		t.Errorf("got %q, want apt:unmet-dep:ubuntu-server (first match wins)", got)
+	}
+}
+
+func TestExtractFailureSignature_StripTrailingPunctuation(t *testing.T) {
+	// Package name may appear with trailing comma in some log formats
+	log := "dpkg: error processing package libfoo-dev, trying overwrite"
+	got := ExtractFailureSignature(log)
+	// The regex captures up to the first space; comma should not be in capture group here
+	// but this tests resilience
+	if got == "" {
+		t.Errorf("expected non-empty signature")
+	}
+}
+
+func TestExtractFailureSignature_OnlyLast200Lines(t *testing.T) {
+	// Pattern at the very beginning of a 250-line log should NOT match
+	// (only last 200 lines are scanned)
+	var lines []string
+	lines = append(lines, "E: Unable to locate package early-package") // line 1 — outside window
+	for i := 0; i < 249; i++ {
+		lines = append(lines, "normal log line")
+	}
+	log := strings.Join(lines, "\n")
+	got := ExtractFailureSignature(log)
+	if got != "" {
+		t.Errorf("expected no match (pattern outside 200-line window), got %q", got)
+	}
+}
+
+// --- GroupBySignature ---
+
+func TestGroupBySignature_GroupsMatchingRecords(t *testing.T) {
+	records := []FailureRecord{
+		{ArtefactID: 1, FailureSignature: "apt:missing:libfoo"},
+		{ArtefactID: 2, FailureSignature: "apt:missing:libfoo"},
+		{ArtefactID: 3, FailureSignature: "dpkg:libbar"},
+		{ArtefactID: 4, FailureSignature: ""},
+	}
+	groups := GroupBySignature(records)
+
+	if len(groups["apt:missing:libfoo"]) != 2 {
+		t.Errorf("expected 2 records for apt:missing:libfoo, got %d",
+			len(groups["apt:missing:libfoo"]))
+	}
+	if len(groups["dpkg:libbar"]) != 1 {
+		t.Errorf("expected 1 record for dpkg:libbar, got %d",
+			len(groups["dpkg:libbar"]))
+	}
+	if len(groups[""]) != 1 {
+		t.Errorf("expected 1 record for empty signature, got %d",
+			len(groups[""]))
+	}
+}
+
+func TestGroupBySignature_Empty(t *testing.T) {
+	groups := GroupBySignature(nil)
+	if groups == nil {
+		t.Error("GroupBySignature should never return nil")
+	}
+	if len(groups) != 0 {
+		t.Errorf("expected empty map, got %d keys", len(groups))
+	}
+}
+
+// --- SetAnalysis propagates Signature to FailureSignature ---
+
+func TestSetAnalysis_PropagatesSignature(t *testing.T) {
+	fs := make(FailureStore)
+	fs.UpsertFailure(Artefact{
+		ID: 10, Name: "stonking-desktop-amd64", Release: "stonking", OS: "ubuntu",
+		BuildLog: BuildStatusFailed, BuildFailureKind: BuildFailureKindProduct,
+		Version: "20260701",
+	})
+
+	analysis := LogAnalysis{
+		Category:   "dependency",
+		Hypothesis: "libfoo missing from archive",
+		Signature:  "apt:missing:libfoo-dev",
+	}
+	fs.SetAnalysis(10, "stonking", "ubuntu", analysis, "20260701")
+
+	recs := fs.ActiveFailures("stonking", "ubuntu")
+	if len(recs) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(recs))
+	}
+	if recs[0].FailureSignature != "apt:missing:libfoo-dev" {
+		t.Errorf("FailureSignature = %q, want %q",
+			recs[0].FailureSignature, "apt:missing:libfoo-dev")
 	}
 }

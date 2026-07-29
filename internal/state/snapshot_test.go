@@ -272,3 +272,127 @@ func TestDiffNewBuild_EmptyPrevVersionExcluded(t *testing.T) {
 		t.Fatalf("expected 0 new builds when prev.Version is empty, got %d", len(report.NewBuilds))
 	}
 }
+
+// --- Diff: BuildLog-based failure/recovery detection ---
+
+func TestDiffBuildLog_NewFailure(t *testing.T) {
+	old := []domain.Artefact{{
+		ID: 1, Name: "stonking-desktop-amd64.iso", Release: "stonking",
+		BuildLog: domain.BuildStatusInProgress,
+	}}
+	fresh := []domain.Artefact{{
+		ID: 1, Name: "stonking-desktop-amd64.iso", Release: "stonking",
+		BuildLog: domain.BuildStatusFailed, BuildFailureKind: domain.BuildFailureKindProduct,
+	}}
+
+	report := Diff(old, fresh)
+
+	if len(report.NewFailures) != 1 {
+		t.Fatalf("expected 1 new failure from BuildLog transition, got %d", len(report.NewFailures))
+	}
+	if report.NewFailures[0].ArtefactID != 1 {
+		t.Errorf("ArtefactID = %d, want 1", report.NewFailures[0].ArtefactID)
+	}
+	if report.NewFailures[0].OldStatus != "IN_PROGRESS" {
+		t.Errorf("OldStatus = %q, want IN_PROGRESS", report.NewFailures[0].OldStatus)
+	}
+	if report.NewFailures[0].NewStatus != "FAILED" {
+		t.Errorf("NewStatus = %q, want FAILED", report.NewFailures[0].NewStatus)
+	}
+}
+
+func TestDiffBuildLog_Recovery(t *testing.T) {
+	old := []domain.Artefact{{
+		ID: 2, Name: "stonking-server-amd64.iso", Release: "stonking",
+		BuildLog: domain.BuildStatusFailed,
+	}}
+	fresh := []domain.Artefact{{
+		ID: 2, Name: "stonking-server-amd64.iso", Release: "stonking",
+		BuildLog: domain.BuildStatusBuilt,
+	}}
+
+	report := Diff(old, fresh)
+
+	if len(report.Recoveries) != 1 {
+		t.Fatalf("expected 1 recovery from BuildLog FAILED→BUILT, got %d", len(report.Recoveries))
+	}
+	if report.Recoveries[0].ArtefactID != 2 {
+		t.Errorf("ArtefactID = %d, want 2", report.Recoveries[0].ArtefactID)
+	}
+}
+
+func TestDiffBuildLog_NoFirstBootNoise(t *testing.T) {
+	// When prev.BuildLog is empty (prior snapshot not enriched), no BuildLog-based
+	// failure should be emitted even if the fresh snapshot shows FAILED.
+	old := []domain.Artefact{{
+		ID: 3, Name: "stonking-minimal-amd64.iso", Release: "stonking",
+		BuildLog: "", // empty — old snapshot was not enriched
+	}}
+	fresh := []domain.Artefact{{
+		ID: 3, Name: "stonking-minimal-amd64.iso", Release: "stonking",
+		BuildLog: domain.BuildStatusFailed, BuildFailureKind: domain.BuildFailureKindProduct,
+	}}
+
+	report := Diff(old, fresh)
+
+	if len(report.NewFailures) != 0 {
+		t.Errorf("expected 0 BuildLog-triggered failures when prev.BuildLog empty, got %d",
+			len(report.NewFailures))
+	}
+}
+
+func TestDiffBuildLog_FailedToInProgressNotRecovery(t *testing.T) {
+	// FAILED → IN_PROGRESS (retry started) should NOT be counted as a recovery.
+	old := []domain.Artefact{{
+		ID: 4, Name: "stonking-server-arm64.iso", Release: "stonking",
+		BuildLog: domain.BuildStatusFailed,
+	}}
+	fresh := []domain.Artefact{{
+		ID: 4, Name: "stonking-server-arm64.iso", Release: "stonking",
+		BuildLog: domain.BuildStatusInProgress,
+	}}
+
+	report := Diff(old, fresh)
+
+	if len(report.Recoveries) != 0 {
+		t.Errorf("FAILED→IN_PROGRESS should not be a recovery, got %d recoveries",
+			len(report.Recoveries))
+	}
+}
+
+func TestDiffBuildLog_StatusAndBuildLogIndependent(t *testing.T) {
+	// An artefact can transition on both signals independently.
+	// Here: UNDECIDED→MARKED_AS_FAILED (Status signal) AND IN_PROGRESS→FAILED (BuildLog signal).
+	// Should produce 2 entries in NewFailures (one from each signal).
+	old := []domain.Artefact{{
+		ID: 5, Name: "noble-dvd-amd64.iso", Release: "noble",
+		Status: "UNDECIDED", BuildLog: domain.BuildStatusInProgress,
+	}}
+	fresh := []domain.Artefact{{
+		ID: 5, Name: "noble-dvd-amd64.iso", Release: "noble",
+		Status: "MARKED_AS_FAILED", BuildLog: domain.BuildStatusFailed,
+		BuildFailureKind: domain.BuildFailureKindProduct,
+	}}
+
+	report := Diff(old, fresh)
+
+	if len(report.NewFailures) != 2 {
+		t.Errorf("expected 2 NewFailures (one per signal), got %d", len(report.NewFailures))
+	}
+}
+
+func TestDiffArtefactDelta_HasArtefactID(t *testing.T) {
+	// All ArtefactDelta entries produced by Diff must carry the ArtefactID so
+	// UpdateFailureRecords can do ID-based lookup instead of name-based lookup.
+	old := []domain.Artefact{{ID: 99, Name: "x", Status: "UNDECIDED"}}
+	fresh := []domain.Artefact{{ID: 99, Name: "x", Status: "MARKED_AS_FAILED"}}
+
+	report := Diff(old, fresh)
+
+	if len(report.NewFailures) != 1 {
+		t.Fatalf("expected 1 failure")
+	}
+	if report.NewFailures[0].ArtefactID != 99 {
+		t.Errorf("ArtefactID = %d, want 99", report.NewFailures[0].ArtefactID)
+	}
+}

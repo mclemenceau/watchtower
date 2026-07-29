@@ -28,6 +28,7 @@ Respond with valid JSON only — no markdown, no extra text:
 {
   "category": "infra|code|dependency|flaky|unknown",
   "hypothesis": "one-sentence root cause",
+  "signature": "short-slug-3-to-5-words e.g. apt:missing:libfoo-dev or snap:install:core24",
   "log_excerpts": ["most relevant line 1", "most relevant line 2"],
   "next_action": "recommended next step for the engineer"
 }`
@@ -122,10 +123,12 @@ func ResolveLogURL(
 	return src, libContent, nil
 }
 
-// AnalyzeLog fetches the best available log for the artefact, truncates it,
-// calls the LLM, and returns the parsed LogAnalysis plus the human-readable
-// source description. It is the single implementation used by both the
-// interactive investigate command and the background FailureAnalysisWorkflow.
+// AnalyzeLog fetches the best available log for the artefact and returns a
+// LogAnalysis. It short-circuits the LLM call when
+// domain.ExtractFailureSignature recognises a known pattern in the log — in
+// that case no API call is made and the result is returned immediately using
+// only deterministic pattern matching. The LLM is only invoked for novel
+// failures that do not match any known pattern.
 func AnalyzeLog(
 	ctx context.Context,
 	art domain.Artefact,
@@ -139,6 +142,21 @@ func AnalyzeLog(
 	}
 
 	truncated := LastNLines(content, 200)
+
+	// Short-circuit: if a known failure pattern is found, build the analysis
+	// from the deterministic signature without calling the LLM.
+	if sig := domain.ExtractFailureSignature(truncated); sig != "" {
+		excerpts := matchingLines(truncated, sig)
+		return domain.LogAnalysis{
+			Category:    inferCategory(sig),
+			Hypothesis:  "Known failure pattern: " + sig,
+			Signature:   sig,
+			LogExcerpts: excerpts,
+			NextAction:  "Search for recent archive changes matching: " + sig,
+		}, src, nil
+	}
+
+	// Novel failure — call the LLM.
 	prompt := fmt.Sprintf(
 		"Image: %s\n\nBuild log (last 200 lines):\n%s",
 		art.Name, truncated,
@@ -155,6 +173,54 @@ func AnalyzeLog(
 			fmt.Errorf("parse LLM response: %w", err)
 	}
 	return result, src, nil
+}
+
+// inferCategory returns the LogAnalysis category string that best describes a
+// deterministically-matched signature without needing the LLM.
+func inferCategory(sig string) string {
+	switch {
+	case strings.HasPrefix(sig, "apt:") ||
+		strings.HasPrefix(sig, "dpkg:") ||
+		strings.HasPrefix(sig, "snap:"):
+		return "dependency"
+	case strings.HasPrefix(sig, "debootstrap:"):
+		return "infra"
+	default:
+		return "unknown"
+	}
+}
+
+// matchingLines returns up to 3 lines from content that triggered the given
+// signature, used as LogExcerpts when short-circuiting the LLM.
+func matchingLines(content, sig string) []string {
+	// Derive a simple keyword from the signature to search for in the log.
+	// e.g. "apt:missing:libfoo-dev" → ["libfoo-dev"], "dpkg:subprocess-error" → ["dpkg"]
+	parts := strings.SplitN(sig, ":", 3)
+	keywords := make([]string, 0, 2)
+	if len(parts) >= 3 && parts[2] != "" {
+		keywords = append(keywords, parts[2]) // package/snap name
+	}
+	if len(parts) >= 1 && parts[0] != "" {
+		keywords = append(keywords, parts[0]) // prefix: apt/dpkg/snap/debootstrap
+	}
+
+	var out []string
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		for _, kw := range keywords {
+			if strings.Contains(trimmed, kw) {
+				out = append(out, trimmed)
+				break
+			}
+		}
+		if len(out) >= 3 {
+			break
+		}
+	}
+	return out
 }
 
 // LastNLines returns the last n lines of text.

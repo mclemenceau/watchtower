@@ -55,6 +55,7 @@ State data schema (when provided):
   failures[]   — persistent failure records: artefact_id, artefact_name,
                  release, product, first_seen_version, last_seen_version,
                  occurrences, failure_kind, failure_description,
+                 failure_signature (canonical slug e.g. apt:missing:libfoo-dev),
                  analysis_category, analysis_hypothesis, analysis_next_action,
                  analysis_excerpts (most relevant log lines from the LLM analysis)
   tests[]      — test execution results (only present for test-focused queries):
