@@ -158,6 +158,12 @@ func Dispatch(
 	case strings.HasPrefix(lower, "failures ") && len(parts) == 3:
 		return notifier.Send(FormatFailuresSummary(failures.ActiveFailures(parts[1], parts[2]), parts[1], parts[2]))
 
+	case strings.HasPrefix(lower, "failure detail ") && len(parts) == 3:
+		return failureDetailCommand(parts[2], failures, notifier)
+
+	case lower == "failure detail":
+		return notifier.Send("Usage: `failure detail <artefact-id>` — use `failures` to find IDs")
+
 	case lower == "analyse failures" || lower == "analyze failures":
 		return triggerAnalysisCommand(ctx, "", triggerAnalysis, notifier)
 
@@ -272,4 +278,26 @@ func triggerAnalysisCommand(_ context.Context, release string, trigger func(stri
 		return notifier.Send(fmt.Sprintf("Failure analysis started for **%s** — results will appear in `failures %s` once complete.", release, release))
 	}
 	return notifier.Send("Failure analysis started — results will appear in `failures` once complete.")
+}
+
+// failureDetailCommand looks up a FailureRecord by artefact ID and returns its
+// full detail including any LLM analysis. Only active (unresolved) records are
+// searched — consistent with the `failures` command.
+func failureDetailCommand(idStr string, failures domain.FailureStore, notifier ports.Notifier) error {
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		return notifier.Send(fmt.Sprintf(
+			"Invalid artefact ID `%s` — must be a number. Use `failures` to find IDs.",
+			idStr,
+		))
+	}
+	for _, rec := range failures.ActiveFailures("", "") {
+		if rec.ArtefactID == id {
+			return notifier.Send(FormatFailureDetail(rec))
+		}
+	}
+	return notifier.Send(fmt.Sprintf(
+		"No active failure found for artefact ID `%d`. Use `failures` to list active IDs.",
+		id,
+	))
 }

@@ -270,18 +270,29 @@ func (fs FailureStore) ActiveFailures(release, product string) []FailureRecord {
 	return out
 }
 
-// PendingAnalysis returns all unresolved FailureRecords that have no Analysis yet,
+// PendingAnalysis returns all unresolved FailureRecords that need LLM analysis,
 // capped at max records. Pass max=0 for no cap.
+//
+// INFRA records are skipped: they already carry a deterministic description
+// from cd-build-log parsing (e.g. "disk full", "LP API error") that is more
+// precise than anything the LLM can produce from the same log. Sending them
+// to the LLM wastes tokens without improving the user experience.
+// UNKNOWN records are included alongside PRODUCT ones — the UNKNOWN kind is
+// reserved for future classification and may benefit from LLM analysis.
 func (fs FailureStore) PendingAnalysis(max int) []FailureRecord {
 	var out []FailureRecord
 	for _, byProduct := range fs {
 		for _, records := range byProduct {
 			for _, r := range records {
-				if !r.Resolved && r.Analysis == nil {
-					out = append(out, r)
-					if max > 0 && len(out) >= max {
-						return out
-					}
+				if r.Resolved || r.Analysis != nil {
+					continue
+				}
+				if r.FailureKind == BuildFailureKindInfra {
+					continue // deterministic description already set; skip
+				}
+				out = append(out, r)
+				if max > 0 && len(out) >= max {
+					return out
 				}
 			}
 		}

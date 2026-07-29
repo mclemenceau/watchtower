@@ -805,6 +805,7 @@ func HelpText() string {
 | ` + "`failures`" + `                                      | Active failures across all releases |
 | ` + "`failures <release>`" + `                            | Active failures for a specific release |
 | ` + "`failures <release> <product>`" + `                  | Active failures for a release and product |
+| ` + "`failure detail <artefact-id>`" + `                  | Full detail for one failure including LLM analysis |
 | ` + "`analyse failures`" + `                              | Trigger LLM log analysis on pending failures (background) |
 | ` + "`analyse failures <release>`" + `                    | Trigger analysis scoped to a release |
 | ` + "`investigate <artefact-id>`" + `                     | Fetch build log and run LLM root-cause analysis |

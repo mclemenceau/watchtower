@@ -10,6 +10,7 @@ import (
 
 	"github.com/mclemenceau/watchtower/internal/application"
 	"github.com/mclemenceau/watchtower/internal/domain"
+	"github.com/mclemenceau/watchtower/internal/logutil"
 	"github.com/mclemenceau/watchtower/internal/ports"
 	"github.com/mclemenceau/watchtower/internal/state"
 )
@@ -22,8 +23,9 @@ type Activities struct {
 	Failures           ports.FailureStorePort
 	Hook               ports.Notifier
 	LogFetcher         ports.LogFetcher
-	ReleasesScope      []string // ordered release scope for all operations; nil = all
-	SummaryForProducts []string // restrict summaries to these OS/product names; nil = all
+	Launchpad          ports.LaunchpadSource // optional; enables two-hop LP log resolution
+	ReleasesScope      []string              // ordered release scope for all operations; nil = all
+	SummaryForProducts []string              // restrict summaries to these OS/product names; nil = all
 	LLM                ports.LLMClient
 	MaxAnalysisPerRun  int // cap on LLM calls per FailureAnalysisWorkflow run; 0 = default (5)
 }
@@ -351,6 +353,13 @@ func (a *Activities) UpdateFailureRecords(_ context.Context, report domain.Chang
 // AnalyseFailures runs LLM log analysis on unresolved FailureRecords that have
 // no Analysis yet. It processes at most maxPerRun records (token cap). Results
 // are persisted back to failures.json after each successful analysis.
+//
+// When a.Launchpad is configured the two-hop log resolution is used: it first
+// fetches the cd-build-log, then resolves the per-arch Launchpad librarian URL
+// and fetches the actual builder log. This gives the LLM the detailed error
+// output (e.g. debootstrap failures, dependency conflicts) rather than just a
+// high-level "Failed to build" line. Falls back to the cd-build-log if any
+// step in the resolution fails.
 func (a *Activities) AnalyseFailures(ctx context.Context, artefacts []domain.Artefact) error {
 	if a.Failures == nil || a.LLM == nil || a.LogFetcher == nil {
 		return nil // LLM or fetcher not configured — skip silently
@@ -383,25 +392,20 @@ func (a *Activities) AnalyseFailures(ctx context.Context, artefacts []domain.Art
 			continue
 		}
 
-		// Derive today's log URL for this artefact.
-		today := time.Now().UTC().Format("20060102")
-		logURL := domain.LogURLFromImageURLForDate(art.ImageURL, today)
-		if logURL == "" {
-			continue
-		}
-
-		logContent, err := a.FetchLog(ctx, logURL)
+		// Use the two-hop resolution: cd-build-log → LP REST → librarian.
+		// a.Launchpad may be nil; ResolveLogURL gracefully falls back to the
+		// cd-build-log in that case, so INFRA failures still get analysed.
+		analysis, _, err := logutil.AnalyzeLog(
+			ctx, art, a.LogFetcher, a.Launchpad, a.LLM,
+		)
 		if err != nil {
-			// Non-fatal: log URL may not exist yet for today's build.
+			// Non-fatal: one bad LLM or fetch call should not abort the run.
 			continue
 		}
-
-		analysis, err := a.AnalyzeLog(ctx, art.Name, logContent)
-		if err != nil {
-			// Non-fatal: one bad LLM call should not abort the run.
-			continue
-		}
-		store.SetAnalysis(rec.ArtefactID, rec.Release, rec.Product, analysis, rec.LastSeenVersion)
+		store.SetAnalysis(
+			rec.ArtefactID, rec.Release, rec.Product,
+			analysis, rec.LastSeenVersion,
+		)
 	}
 
 	if err := a.Failures.WriteFailures(store); err != nil {

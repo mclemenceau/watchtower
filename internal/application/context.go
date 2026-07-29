@@ -46,6 +46,10 @@ type contextFailure struct {
 	AnalysisCategory   string                  `json:"analysis_category,omitempty"`
 	AnalysisHypothesis string                  `json:"analysis_hypothesis,omitempty"`
 	AnalysisNextAction string                  `json:"analysis_next_action,omitempty"`
+	// AnalysisExcerpts are the most relevant log lines identified by the LLM.
+	// Including them gives the intent resolver concrete evidence to cite when
+	// answering questions like "what exactly is failing in noble-desktop?".
+	AnalysisExcerpts []string `json:"analysis_excerpts,omitempty"`
 }
 
 // contextPayload is the top-level structure serialised into contextJSON.
@@ -189,6 +193,7 @@ func BuildContext(msg string, artefacts []domain.Artefact, failures domain.Failu
 			cf.AnalysisCategory = f.Analysis.Category
 			cf.AnalysisHypothesis = f.Analysis.Hypothesis
 			cf.AnalysisNextAction = f.Analysis.NextAction
+			cf.AnalysisExcerpts = f.Analysis.LogExcerpts
 		}
 		ctxFails = append(ctxFails, cf)
 	}

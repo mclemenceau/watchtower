@@ -95,6 +95,7 @@ func main() {
 		Failures:           failureState,
 		Hook:               notifier,
 		LogFetcher:         logFetcher,
+		Launchpad:          launchpadSrc,
 		ReleasesScope:      cfg.ReleasesScope,
 		SummaryForProducts: cfg.SummaryForProducts,
 		LLM:                llmClient,

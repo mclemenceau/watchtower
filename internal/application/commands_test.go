@@ -937,53 +937,112 @@ func TestDispatchInvestigateLLMError(t *testing.T) {
 	}
 }
 
-// --- matchLaunchpadURL ---
+// --- failure detail ---
 
-func TestMatchLaunchpadURL_ExactSimpleArch(t *testing.T) {
-	lpURLs := map[string]string{
-		"amd64": "https://launchpad.net/+build/1",
-		"arm64": "https://launchpad.net/+build/2",
+func testFailureStore() domain.FailureStore {
+	fs := make(domain.FailureStore)
+	fs.UpsertFailure(domain.Artefact{
+		ID: 500, Name: "noble-desktop-amd64", Release: "noble", OS: "ubuntu",
+		BuildLog:                domain.BuildStatusFailed,
+		BuildFailureKind:        domain.BuildFailureKindProduct,
+		BuildFailureDescription: "debootstrap failed",
+		Version:                 "20260701",
+	})
+	return fs
+}
+
+func TestDispatchFailureDetail_Found(t *testing.T) {
+	hook := &captureNotifier{}
+	fs := testFailureStore()
+	if err := Dispatch(context.Background(), "test", "failure detail 500",
+		testArtefacts, fs, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	got := matchLaunchpadURL(lpURLs, "amd64")
-	if got != "https://launchpad.net/+build/1" {
-		t.Errorf("matchLaunchpadURL(amd64) = %q, want build/1", got)
+	if !strings.Contains(hook.last, "noble-desktop-amd64") {
+		t.Errorf("expected artefact name in output, got:\n%s", hook.last)
+	}
+	if !strings.Contains(hook.last, "noble") {
+		t.Errorf("expected release name in output, got:\n%s", hook.last)
 	}
 }
 
-func TestMatchLaunchpadURL_SubstringVariantArch(t *testing.T) {
-	// Variant build: label is "desktop-preinstalled-arm64-raspi", arch is "arm64+raspi"
-	lpURLs := map[string]string{
-		"desktop-preinstalled-arm64-raspi": "https://launchpad.net/+build/99",
+func TestDispatchFailureDetail_NotFound(t *testing.T) {
+	hook := &captureNotifier{}
+	fs := testFailureStore()
+	if err := Dispatch(context.Background(), "test", "failure detail 9999",
+		testArtefacts, fs, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	got := matchLaunchpadURL(lpURLs, "arm64+raspi")
-	if got != "https://launchpad.net/+build/99" {
-		t.Errorf("matchLaunchpadURL(arm64+raspi) = %q, want build/99", got)
-	}
-}
-
-func TestMatchLaunchpadURL_NormalisesPlus(t *testing.T) {
-	lpURLs := map[string]string{
-		"amd64+tegra": "https://launchpad.net/+build/50",
-	}
-	got := matchLaunchpadURL(lpURLs, "amd64+tegra")
-	if got != "https://launchpad.net/+build/50" {
-		t.Errorf("matchLaunchpadURL(amd64+tegra) = %q, want build/50", got)
+	if !strings.Contains(hook.last, "No active failure") {
+		t.Errorf("expected 'No active failure' in output, got:\n%s", hook.last)
 	}
 }
 
-func TestMatchLaunchpadURL_NoMatch(t *testing.T) {
-	lpURLs := map[string]string{
-		"amd64": "https://launchpad.net/+build/1",
+func TestDispatchFailureDetail_InvalidID(t *testing.T) {
+	hook := &captureNotifier{}
+	fs := testFailureStore()
+	if err := Dispatch(context.Background(), "test", "failure detail notanumber",
+		testArtefacts, fs, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	got := matchLaunchpadURL(lpURLs, "riscv64")
-	if got != "" {
-		t.Errorf("matchLaunchpadURL(riscv64) = %q, want empty", got)
+	if !strings.Contains(hook.last, "Invalid artefact ID") {
+		t.Errorf("expected 'Invalid artefact ID' in output, got:\n%s", hook.last)
 	}
 }
 
-func TestMatchLaunchpadURL_EmptyMap(t *testing.T) {
-	got := matchLaunchpadURL(map[string]string{}, "amd64")
-	if got != "" {
-		t.Errorf("matchLaunchpadURL on empty map = %q, want empty", got)
+func TestDispatchFailureDetail_NoArgs(t *testing.T) {
+	hook := &captureNotifier{}
+	fs := testFailureStore()
+	if err := Dispatch(context.Background(), "test", "failure detail",
+		testArtefacts, fs, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(hook.last, "Usage:") {
+		t.Errorf("expected usage hint in output, got:\n%s", hook.last)
+	}
+}
+
+func TestDispatchFailures_Empty(t *testing.T) {
+	hook := &captureNotifier{}
+	if err := Dispatch(context.Background(), "test", "failures",
+		testArtefacts, make(domain.FailureStore), nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(hook.last, "No active failures") {
+		t.Errorf("expected 'No active failures' in output, got:\n%s", hook.last)
+	}
+}
+
+func TestDispatchFailures_WithRecords(t *testing.T) {
+	hook := &captureNotifier{}
+	fs := testFailureStore()
+	if err := Dispatch(context.Background(), "test", "failures",
+		testArtefacts, fs, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(hook.last, "noble-desktop-amd64") {
+		t.Errorf("expected artefact name in output, got:\n%s", hook.last)
+	}
+}
+
+func TestDispatchFailures_Release(t *testing.T) {
+	hook := &captureNotifier{}
+	fs := testFailureStore()
+	// Release matches — should include the record.
+	if err := Dispatch(context.Background(), "test", "failures noble",
+		testArtefacts, fs, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(hook.last, "noble-desktop-amd64") {
+		t.Errorf("expected artefact in output for 'failures noble', got:\n%s", hook.last)
+	}
+
+	// Different release — should find nothing.
+	if err := Dispatch(context.Background(), "test", "failures plucky",
+		testArtefacts, fs, nil, nil, hook, "", nil, nil, nil, nil, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(hook.last, "No active failures") {
+		t.Errorf("expected 'No active failures' for 'failures plucky', got:\n%s", hook.last)
 	}
 }

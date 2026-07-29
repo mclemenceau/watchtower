@@ -776,3 +776,87 @@ func TestUpsertFailureKindDescription(t *testing.T) {
 		t.Errorf("updated FailureDescription = %q, want %q", recs[0].FailureDescription, art2.BuildFailureDescription)
 	}
 }
+
+// --- PendingAnalysis ---
+
+func TestPendingAnalysis_SkipsINFRA(t *testing.T) {
+	fs := make(FailureStore)
+	fs.UpsertFailure(Artefact{
+		ID: 10, Name: "noble-server-amd64", Release: "noble", OS: "ubuntu-server",
+		BuildLog: BuildStatusFailed, BuildFailureKind: BuildFailureKindInfra,
+		BuildFailureDescription: "disk full", Version: "20260101",
+	})
+
+	pending := fs.PendingAnalysis(10)
+	if len(pending) != 0 {
+		t.Errorf("PendingAnalysis returned %d records for INFRA failure, want 0", len(pending))
+	}
+}
+
+func TestPendingAnalysis_IncludesPRODUCT(t *testing.T) {
+	fs := make(FailureStore)
+	fs.UpsertFailure(Artefact{
+		ID: 20, Name: "noble-desktop-amd64", Release: "noble", OS: "ubuntu",
+		BuildLog: BuildStatusFailed, BuildFailureKind: BuildFailureKindProduct,
+		BuildFailureDescription: "debootstrap failed", Version: "20260101",
+	})
+
+	pending := fs.PendingAnalysis(10)
+	if len(pending) != 1 {
+		t.Errorf("PendingAnalysis returned %d records for PRODUCT failure, want 1", len(pending))
+	}
+	if pending[0].ArtefactID != 20 {
+		t.Errorf("PendingAnalysis returned wrong record: ID %d, want 20", pending[0].ArtefactID)
+	}
+}
+
+func TestPendingAnalysis_SkipsResolved(t *testing.T) {
+	fs := make(FailureStore)
+	fs.UpsertFailure(Artefact{
+		ID: 30, Name: "noble-minimal-amd64", Release: "noble", OS: "ubuntu-minimal",
+		BuildLog: BuildStatusFailed, BuildFailureKind: BuildFailureKindProduct,
+		Version: "20260101",
+	})
+	fs.ResolveFailure(30, "noble", "ubuntu-minimal")
+
+	pending := fs.PendingAnalysis(10)
+	if len(pending) != 0 {
+		t.Errorf("PendingAnalysis returned %d records for resolved failure, want 0", len(pending))
+	}
+}
+
+func TestPendingAnalysis_SkipsAlreadyAnalysed(t *testing.T) {
+	fs := make(FailureStore)
+	fs.UpsertFailure(Artefact{
+		ID: 40, Name: "noble-desktop-arm64", Release: "noble", OS: "ubuntu",
+		BuildLog: BuildStatusFailed, BuildFailureKind: BuildFailureKindProduct,
+		Version: "20260101",
+	})
+	analysis := LogAnalysis{
+		Category:   "dependency",
+		Hypothesis: "libfoo missing",
+	}
+	fs.SetAnalysis(40, "noble", "ubuntu", analysis, "20260101")
+
+	pending := fs.PendingAnalysis(10)
+	if len(pending) != 0 {
+		t.Errorf("PendingAnalysis returned %d records for already-analysed failure, want 0",
+			len(pending))
+	}
+}
+
+func TestPendingAnalysis_RespectsCap(t *testing.T) {
+	fs := make(FailureStore)
+	for i := 0; i < 10; i++ {
+		fs.UpsertFailure(Artefact{
+			ID: 100 + i, Name: "art", Release: "noble", OS: "ubuntu",
+			BuildLog: BuildStatusFailed, BuildFailureKind: BuildFailureKindProduct,
+			Version: "20260101",
+		})
+	}
+
+	pending := fs.PendingAnalysis(3)
+	if len(pending) != 3 {
+		t.Errorf("PendingAnalysis with cap=3 returned %d records, want 3", len(pending))
+	}
+}
