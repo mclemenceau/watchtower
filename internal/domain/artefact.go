@@ -308,7 +308,18 @@ func (fs FailureStore) PendingAnalysis(max int) []FailureRecord {
 // in the given release+product bucket. The Signature field is also promoted to
 // FailureSignature on the record to enable cross-artefact grouping queries
 // without having to dereference Analysis.
-func (fs FailureStore) SetAnalysis(artefactID int, release, product string, analysis LogAnalysis, version string) {
+//
+// reclassify may be non-empty to override the record's FailureKind. This is
+// used when log resolution reveals that a previously-classified PRODUCT failure
+// is actually an infrastructure failure — for example when Launchpad ran the
+// build but produced no log (ErrNoLPLog).
+func (fs FailureStore) SetAnalysis(
+	artefactID int,
+	release, product string,
+	analysis LogAnalysis,
+	version string,
+	reclassify BuildFailureKind,
+) {
 	records := fs[release][product]
 	now := time.Now().UTC()
 	for i := range records {
@@ -318,6 +329,12 @@ func (fs FailureStore) SetAnalysis(artefactID int, release, product string, anal
 			records[i].AnalysedAt = &now
 			if analysis.Signature != "" {
 				records[i].FailureSignature = analysis.Signature
+			}
+			if reclassify != "" {
+				records[i].FailureKind = reclassify
+				// Also clear any stale deterministic description — the new
+				// kind supersedes what ParseBuildStatusFromLog set.
+				records[i].FailureDescription = analysis.Hypothesis
 			}
 		}
 	}

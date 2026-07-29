@@ -836,7 +836,7 @@ func TestPendingAnalysis_SkipsAlreadyAnalysed(t *testing.T) {
 		Category:   "dependency",
 		Hypothesis: "libfoo missing",
 	}
-	fs.SetAnalysis(40, "noble", "ubuntu", analysis, "20260101")
+	fs.SetAnalysis(40, "noble", "ubuntu", analysis, "20260101", "")
 
 	pending := fs.PendingAnalysis(10)
 	if len(pending) != 0 {
@@ -1021,7 +1021,7 @@ func TestSetAnalysis_PropagatesSignature(t *testing.T) {
 		Hypothesis: "libfoo missing from archive",
 		Signature:  "apt:missing:libfoo-dev",
 	}
-	fs.SetAnalysis(10, "stonking", "ubuntu", analysis, "20260701")
+	fs.SetAnalysis(10, "stonking", "ubuntu", analysis, "20260701", "")
 
 	recs := fs.ActiveFailures("stonking", "ubuntu")
 	if len(recs) != 1 {

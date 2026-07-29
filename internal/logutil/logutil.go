@@ -10,6 +10,7 @@ package logutil
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -17,6 +18,18 @@ import (
 	"github.com/mclemenceau/watchtower/internal/domain"
 	"github.com/mclemenceau/watchtower/internal/ports"
 )
+
+// ErrNoLPLog is returned by ResolveLogURL when the Launchpad REST API was
+// reachable and returned a valid response for a known build page URL, but
+// build_log_url was null. This means Launchpad accepted and ran the build
+// but never attached a log — the build was lost or purged before the log
+// was uploaded. This is an infrastructure signal, not a product failure:
+// there is no build output to analyse.
+//
+// Callers (AnalyzeLog) must not fall back to the cd-build-log in this case
+// because doing so would yield a misleading PRODUCT diagnosis from the
+// "Failed to build" line that is actually a symptom of the LP infra problem.
+var ErrNoLPLog = errors.New("launchpad build completed with no log available")
 
 // AnalyzeLogSystem is the system prompt used for all LLM log analysis calls,
 // both interactive (investigate command) and background (FailureAnalysisWorkflow).
@@ -46,7 +59,13 @@ type LogSource struct {
 //  2. Fetch that log and scan for per-arch Launchpad build page URLs.
 //  3. If a Launchpad build page URL is found for the primary arch, call the
 //     Launchpad REST API to get the librarian log URL.
-//  4. Fall back to the cd-build-log whenever any step fails or returns nothing.
+//  4. Fall back to the cd-build-log when Launchpad is unreachable or when
+//     no build page URL was found for this arch in the cd-build-log.
+//
+// Special case: if Launchpad is reachable and returns a valid response for the
+// build page but build_log_url is null, ErrNoLPLog is returned. This signals
+// that the build ran without producing a log — an infrastructure failure that
+// callers must not mask by falling back to the cd-build-log.
 //
 // launchpad may be nil — in that case step 3 is skipped and the cd-build-log
 // content fetched in step 2 is returned directly.
@@ -96,13 +115,21 @@ func ResolveLogURL(
 
 	// Resolve the librarian log URL via the Launchpad REST API.
 	librarianURL, err := launchpad.FetchBuildLogURL(ctx, buildPageURL)
-	if err != nil || librarianURL == "" {
-		// Launchpad API unavailable or log not yet posted — fall back.
+	if err != nil {
+		// Launchpad API unreachable — fall back to cd-build-log.
 		src := LogSource{
 			URL:         cdLogURL,
 			Description: "cd-build-log (Launchpad unavailable)",
 		}
 		return src, cdContent, nil
+	}
+	if librarianURL == "" {
+		// Launchpad was reachable and returned a valid response, but
+		// build_log_url is null. The build ran but produced no log —
+		// this is an infrastructure failure. Do NOT fall back to the
+		// cd-build-log: its "Failed to build" line would produce a
+		// misleading PRODUCT diagnosis.
+		return LogSource{}, "", ErrNoLPLog
 	}
 
 	// Fetch the actual Launchpad librarian log (may be gzip-compressed).
@@ -124,21 +151,43 @@ func ResolveLogURL(
 }
 
 // AnalyzeLog fetches the best available log for the artefact and returns a
-// LogAnalysis. It short-circuits the LLM call when
-// domain.ExtractFailureSignature recognises a known pattern in the log — in
-// that case no API call is made and the result is returned immediately using
-// only deterministic pattern matching. The LLM is only invoked for novel
-// failures that do not match any known pattern.
+// LogAnalysis. It short-circuits the LLM call in two cases:
+//
+//  1. domain.ExtractFailureSignature recognises a known pattern in the log —
+//     the result is built deterministically without an API call.
+//  2. ResolveLogURL returns ErrNoLPLog — Launchpad was reachable but the build
+//     produced no log. This is an infrastructure failure; a pre-built INFRA
+//     analysis is returned and the reclassified kind (BuildFailureKindInfra) is
+//     returned as the second value so callers can update the failure record.
+//
+// The returned BuildFailureKind is non-empty only when the kind differs from
+// what ParseBuildStatusFromLog determined at EnrichBuildStatus time (currently
+// only the ErrNoLPLog reclassification). Callers should update FailureRecord
+// .FailureKind when a non-empty kind is returned.
 func AnalyzeLog(
 	ctx context.Context,
 	art domain.Artefact,
 	logFetcher ports.LogFetcher,
 	launchpad ports.LaunchpadSource,
 	llm ports.LLMClient,
-) (domain.LogAnalysis, LogSource, error) {
+) (domain.LogAnalysis, domain.BuildFailureKind, LogSource, error) {
 	src, content, err := ResolveLogURL(ctx, art, logFetcher, launchpad)
 	if err != nil {
-		return domain.LogAnalysis{}, LogSource{}, err
+		if errors.Is(err, ErrNoLPLog) {
+			// Launchpad ran the build but produced no log — infra failure.
+			// Do not fall back to the cd-build-log; its "Failed to build"
+			// line would produce a misleading PRODUCT diagnosis.
+			analysis := domain.LogAnalysis{
+				Category:   "infra",
+				Hypothesis: ErrNoLPLog.Error(),
+				Signature:  "lp:missing-build-log",
+				NextAction: "Check Launchpad builder health; retry the build",
+			}
+			return analysis, domain.BuildFailureKindInfra, LogSource{
+				Description: "no Launchpad build log available",
+			}, nil
+		}
+		return domain.LogAnalysis{}, "", LogSource{}, err
 	}
 
 	truncated := LastNLines(content, 200)
@@ -153,7 +202,7 @@ func AnalyzeLog(
 			Signature:   sig,
 			LogExcerpts: excerpts,
 			NextAction:  "Search for recent archive changes matching: " + sig,
-		}, src, nil
+		}, "", src, nil
 	}
 
 	// Novel failure — call the LLM.
@@ -163,16 +212,16 @@ func AnalyzeLog(
 	)
 	raw, err := llm.Complete(ctx, AnalyzeLogSystem, prompt)
 	if err != nil {
-		return domain.LogAnalysis{}, src,
+		return domain.LogAnalysis{}, "", src,
 			fmt.Errorf("LLM analysis: %w", err)
 	}
 
 	var result domain.LogAnalysis
 	if err := json.Unmarshal([]byte(StripCodeFence(raw)), &result); err != nil {
-		return domain.LogAnalysis{}, src,
+		return domain.LogAnalysis{}, "", src,
 			fmt.Errorf("parse LLM response: %w", err)
 	}
-	return result, src, nil
+	return result, "", src, nil
 }
 
 // inferCategory returns the LogAnalysis category string that best describes a

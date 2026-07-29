@@ -2,6 +2,7 @@ package logutil
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/mclemenceau/watchtower/internal/domain"
@@ -147,7 +148,7 @@ func TestAnalyzeLog_ShortCircuit_NoLLMCall(t *testing.T) {
 		ImageURL: "https://cdimage.ubuntu.com/ubuntu/stonking/daily-live/20260701/stonking-desktop-amd64.iso",
 	}
 
-	analysis, src, err := AnalyzeLog(
+	analysis, _, src, err := AnalyzeLog(
 		context.Background(),
 		art,
 		&mockLogFetcher{content: logContent},
@@ -213,4 +214,97 @@ func TestMatchingLines_ReturnsRelevantLines(t *testing.T) {
 	if !found {
 		t.Errorf("expected exact error line in excerpts, got %v", lines)
 	}
+}
+
+// --- ErrNoLPLog reclassification ---
+
+// mockLaunchpadSource returns a fixed URL and error for FetchBuildLogURL.
+type mockLaunchpadSource struct {
+	url string
+	err error
+}
+
+func (m *mockLaunchpadSource) FetchBuildLogURL(_ context.Context, _ string) (string, error) {
+	return m.url, m.err
+}
+
+// TestAnalyzeLog_ErrNoLPLog_ReturnsInfraAnalysis is the regression test for the
+// case where Launchpad is reachable but build_log_url is null. The build ran and
+// failed without producing a log — this is an infrastructure failure. AnalyzeLog
+// must NOT fall back to the cd-build-log or call the LLM; it must return a
+// pre-built INFRA analysis and the BuildFailureKindInfra reclassification.
+func TestAnalyzeLog_ErrNoLPLog_ReturnsInfraAnalysis(t *testing.T) {
+	// cd-build-log contains a Launchpad link so ResolveLogURL will call LP.
+	cdLog := "lubuntu-amd64: https://launchpad.net/~ubuntu-cdimage/+livefs/ubuntu/stonking/lubuntu/+build/999659\n" +
+		"lubuntu-amd64 on Launchpad finished at 2026-07-29 14:00:29 (Failed to build)\n"
+	art := domain.Artefact{
+		ID:   25674,
+		Name: "stonking-desktop-amd64.iso",
+		ImageURL: "https://cdimage.ubuntu.com/lubuntu/stonking/daily-live/20260728/" +
+			"stonking-desktop-amd64.iso",
+		BuildFailureKind: domain.BuildFailureKindProduct,
+	}
+
+	// LP is reachable but returns no log URL.
+	lp := &mockLaunchpadSource{url: ""}
+
+	analysis, reclassify, src, err := AnalyzeLog(
+		context.Background(), art,
+		&mockLogFetcher{content: cdLog},
+		lp,
+		&panicLLM{}, // must not be called
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if reclassify != domain.BuildFailureKindInfra {
+		t.Errorf("reclassify = %q, want INFRA", reclassify)
+	}
+	if analysis.Category != "infra" {
+		t.Errorf("Category = %q, want infra", analysis.Category)
+	}
+	if analysis.Signature != "lp:missing-build-log" {
+		t.Errorf("Signature = %q, want lp:missing-build-log", analysis.Signature)
+	}
+	if !errors.Is(ErrNoLPLog, ErrNoLPLog) {
+		t.Error("ErrNoLPLog sentinel is broken")
+	}
+	if src.URL != "" {
+		t.Errorf("src.URL should be empty for no-log case, got %q", src.URL)
+	}
+}
+
+// TestAnalyzeLog_LPUnreachable_FallsBackToCDLog verifies that when the Launchpad
+// API itself returns an error (network failure, 5xx), we still fall back to the
+// cd-build-log rather than surfacing an infra reclassification. Only a reachable
+// LP with a null log_url should trigger ErrNoLPLog.
+func TestAnalyzeLog_LPUnreachable_FallsBackToCDLog(t *testing.T) {
+	cdLog := "lubuntu-amd64: https://launchpad.net/~ubuntu-cdimage/+livefs/ubuntu/stonking/lubuntu/+build/1\n" +
+		"E: Unable to locate package libfoo-dev\n"
+	art := domain.Artefact{
+		ID:   1,
+		Name: "stonking-desktop-amd64.iso",
+		ImageURL: "https://cdimage.ubuntu.com/lubuntu/stonking/daily-live/20260728/" +
+			"stonking-desktop-amd64.iso",
+	}
+
+	// LP returns an error (unreachable).
+	lp := &mockLaunchpadSource{err: errors.New("connection refused")}
+
+	analysis, reclassify, src, err := AnalyzeLog(
+		context.Background(), art,
+		&mockLogFetcher{content: cdLog},
+		lp,
+		&panicLLM{}, // short-circuits on apt:missing pattern, LLM not called
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if reclassify != "" {
+		t.Errorf("reclassify = %q, want empty (no reclassification on LP error)", reclassify)
+	}
+	if analysis.Signature != "apt:missing:libfoo-dev" {
+		t.Errorf("Signature = %q, want apt:missing:libfoo-dev", analysis.Signature)
+	}
+	_ = src // fallback source is present
 }

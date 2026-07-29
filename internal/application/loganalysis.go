@@ -21,7 +21,7 @@ func analyzeLog(
 	launchpad ports.LaunchpadSource,
 	llm ports.LLMClient,
 ) (domain.LogAnalysis, string, error) {
-	analysis, src, err := logutil.AnalyzeLog(ctx, art, logFetcher, launchpad, llm)
+	analysis, _, src, err := logutil.AnalyzeLog(ctx, art, logFetcher, launchpad, llm)
 	if err != nil {
 		return domain.LogAnalysis{}, "", err
 	}

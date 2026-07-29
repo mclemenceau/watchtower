@@ -757,6 +757,13 @@ func (m *mockLaunchpadSource) FetchBuildLogURL(_ context.Context, _ string) (str
 	return m.url, m.err
 }
 
+// panicLLM panics if Complete is ever called, proving that no LLM call was made.
+type panicLLM struct{}
+
+func (p *panicLLM) Complete(_ context.Context, _, _ string) (string, error) {
+	panic("LLM should not have been called")
+}
+
 // mockFuncLogFetcher calls a provided function for each Fetch call (useful for
 // testing multi-call sequences such as cd-build-log then librarian log).
 type mockFuncLogFetcher struct {
@@ -900,23 +907,27 @@ func TestDispatchInvestigateWithLaunchpad(t *testing.T) {
 }
 
 func TestDispatchInvestigateLaunchpadFallback(t *testing.T) {
-	// Launchpad API returns no log — should fall back to cd-build-log content.
+	// Launchpad is reachable but returns no log URL — this is an infra signal
+	// (the build ran but LP never attached a log). The investigation must NOT
+	// fall back to the cd-build-log; it should report the infra reclassification
+	// directly and never call the LLM.
 	artefacts := []domain.Artefact{
 		{ID: 42, Name: "noble-desktop-amd64.iso", OS: "ubuntu", Release: "noble", Version: yesterday,
 			ImageURL: "https://cdimage.ubuntu.com/ubuntu/noble/daily-live/20260101/noble-desktop-amd64.iso"},
 	}
 	cdLog := "ubuntu-amd64: https://launchpad.net/~ubuntu-cdimage/+livefs/ubuntu/noble/ubuntu/+build/12345\n"
 	lf := &mockLogFetcher{content: cdLog}
-	lp := &mockLaunchpadSource{url: ""} // empty = no log yet
-	llmResp := `{"category":"unknown","hypothesis":"no detail","log_excerpts":[],"next_action":"check"}`
-	llm := &mockLLMClient{response: llmResp}
-
+	lp := &mockLaunchpadSource{url: ""} // reachable but no log
+	// LLM must not be called — use panicLLM to enforce that.
 	hook := &captureNotifier{}
-	if err := Dispatch(context.Background(), "test", "investigate 42", artefacts, nil, nil, nil, hook, "", nil, lf, llm, lp, nil); err != nil {
+	if err := Dispatch(context.Background(), "test", "investigate 42", artefacts, nil, nil, nil, hook, "", nil, lf, &panicLLM{}, lp, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(hook.last, "cd-build-log") {
-		t.Errorf("expected fallback to 'cd-build-log' in source, got:\n%s", hook.last)
+	if !strings.Contains(hook.last, "no Launchpad build log available") {
+		t.Errorf("expected infra reclassification in source, got:\n%s", hook.last)
+	}
+	if !strings.Contains(hook.last, "infra") {
+		t.Errorf("expected category 'infra' in output, got:\n%s", hook.last)
 	}
 }
 

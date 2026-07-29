@@ -403,7 +403,9 @@ func (a *Activities) AnalyseFailures(ctx context.Context, artefacts []domain.Art
 		// Use the two-hop resolution: cd-build-log → LP REST → librarian.
 		// a.Launchpad may be nil; ResolveLogURL gracefully falls back to the
 		// cd-build-log in that case, so INFRA failures still get analysed.
-		analysis, _, err := logutil.AnalyzeLog(
+		// reclassify is non-empty when log resolution reveals a kind mismatch
+		// (e.g. PRODUCT → INFRA when LP ran the build but produced no log).
+		analysis, reclassify, _, err := logutil.AnalyzeLog(
 			ctx, art, a.LogFetcher, a.Launchpad, a.LLM,
 		)
 		if err != nil {
@@ -413,6 +415,7 @@ func (a *Activities) AnalyseFailures(ctx context.Context, artefacts []domain.Art
 		store.SetAnalysis(
 			rec.ArtefactID, rec.Release, rec.Product,
 			analysis, rec.LastSeenVersion,
+			reclassify,
 		)
 	}
 

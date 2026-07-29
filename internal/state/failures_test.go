@@ -95,7 +95,7 @@ func TestUpsertFailureSameVersionKeepsAnalysis(t *testing.T) {
 	store.UpsertFailure(art)
 
 	analysis := domain.LogAnalysis{Category: "code", Hypothesis: "missing dep"}
-	store.SetAnalysis(7, "plucky", "ubuntu-base", analysis, "20260720")
+	store.SetAnalysis(7, "plucky", "ubuntu-base", analysis, "20260720", "")
 
 	// Upsert again with same version — analysis must be preserved.
 	store.UpsertFailure(art)
