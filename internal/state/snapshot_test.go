@@ -184,7 +184,9 @@ func TestLatestReleaseEmpty(t *testing.T) {
 // --- Diff: NewBuilds ---
 
 func TestDiffNewBuild_VersionAdvancedAndBuilt(t *testing.T) {
-	old := []domain.Artefact{{ID: 1, Name: "noble-desktop-amd64.iso", Release: "noble", Version: "20260401", BuildLog: domain.BuildStatusBuilt}}
+	// Previous snapshot had the old serial (NOT_STARTED — build hadn't run yet).
+	// New snapshot has today's serial and BUILT.
+	old := []domain.Artefact{{ID: 1, Name: "noble-desktop-amd64.iso", Release: "noble", Version: "20260401", BuildLog: domain.BuildStatusNotStarted}}
 	fresh := []domain.Artefact{{ID: 1, Name: "noble-desktop-amd64.iso", Release: "noble", Version: "20260402", BuildLog: domain.BuildStatusBuilt}}
 
 	report := Diff(old, fresh)
@@ -197,9 +199,34 @@ func TestDiffNewBuild_VersionAdvancedAndBuilt(t *testing.T) {
 	}
 }
 
+func TestDiffNewBuild_SameVersionInProgressToBuilt(t *testing.T) {
+	// Build completes within the same serial window (IN_PROGRESS → BUILT between
+	// two cron runs on the same day). Version stays the same; only BuildLog changes.
+	old := []domain.Artefact{{ID: 1, Name: "noble-desktop-amd64.iso", Release: "noble", Version: "20260402", BuildLog: domain.BuildStatusInProgress}}
+	fresh := []domain.Artefact{{ID: 1, Name: "noble-desktop-amd64.iso", Release: "noble", Version: "20260402", BuildLog: domain.BuildStatusBuilt}}
+
+	report := Diff(old, fresh)
+
+	if len(report.NewBuilds) != 1 {
+		t.Fatalf("expected 1 new build (IN_PROGRESS→BUILT same version), got %d", len(report.NewBuilds))
+	}
+}
+
+func TestDiffNewBuild_SameVersionNotStartedToBuilt(t *testing.T) {
+	// Build log goes from NOT_STARTED → BUILT without a version change.
+	old := []domain.Artefact{{ID: 1, Name: "noble-desktop-amd64.iso", Release: "noble", Version: "20260402", BuildLog: domain.BuildStatusNotStarted}}
+	fresh := []domain.Artefact{{ID: 1, Name: "noble-desktop-amd64.iso", Release: "noble", Version: "20260402", BuildLog: domain.BuildStatusBuilt}}
+
+	report := Diff(old, fresh)
+
+	if len(report.NewBuilds) != 1 {
+		t.Fatalf("expected 1 new build (NOT_STARTED→BUILT same version), got %d", len(report.NewBuilds))
+	}
+}
+
 func TestDiffNewBuild_VersionAdvancedButNotBuilt(t *testing.T) {
 	// Version changed but BuildLog is FAILED — should not appear in NewBuilds.
-	old := []domain.Artefact{{ID: 1, Name: "noble-desktop-amd64.iso", Release: "noble", Version: "20260401", BuildLog: domain.BuildStatusBuilt}}
+	old := []domain.Artefact{{ID: 1, Name: "noble-desktop-amd64.iso", Release: "noble", Version: "20260401", BuildLog: domain.BuildStatusNotStarted}}
 	fresh := []domain.Artefact{{ID: 1, Name: "noble-desktop-amd64.iso", Release: "noble", Version: "20260402", BuildLog: domain.BuildStatusFailed}}
 
 	report := Diff(old, fresh)
@@ -224,12 +251,24 @@ func TestDiffNewBuild_FirstBootExcluded(t *testing.T) {
 	}
 }
 
-func TestDiffNewBuild_SameVersionNotReported(t *testing.T) {
-	// Same version and BUILT — no new build notification.
+func TestDiffNewBuild_AlreadyBuiltNotRepeated(t *testing.T) {
+	// Same version, already BUILT in previous snapshot — no duplicate notification.
 	artefact := domain.Artefact{ID: 1, Name: "noble-desktop-amd64.iso", Release: "noble", Version: "20260402", BuildLog: domain.BuildStatusBuilt}
 	report := Diff([]domain.Artefact{artefact}, []domain.Artefact{artefact})
 
 	if len(report.NewBuilds) != 0 {
-		t.Fatalf("expected 0 new builds when version unchanged, got %d", len(report.NewBuilds))
+		t.Fatalf("expected 0 new builds when already BUILT in previous snapshot, got %d", len(report.NewBuilds))
+	}
+}
+
+func TestDiffNewBuild_EmptyPrevVersionExcluded(t *testing.T) {
+	// prev.Version is empty (unknown prior state) — should not fire to avoid noise.
+	old := []domain.Artefact{{ID: 1, Name: "noble-desktop-amd64.iso", Release: "noble", Version: "", BuildLog: domain.BuildStatusNotStarted}}
+	fresh := []domain.Artefact{{ID: 1, Name: "noble-desktop-amd64.iso", Release: "noble", Version: "20260402", BuildLog: domain.BuildStatusBuilt}}
+
+	report := Diff(old, fresh)
+
+	if len(report.NewBuilds) != 0 {
+		t.Fatalf("expected 0 new builds when prev.Version is empty, got %d", len(report.NewBuilds))
 	}
 }

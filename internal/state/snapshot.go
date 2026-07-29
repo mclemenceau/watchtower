@@ -55,9 +55,16 @@ func (s *Snapshot) Write(artefacts []domain.Artefact) error {
 // Status vocabulary: APPROVED | MARKED_AS_FAILED | UNDECIDED
 // MARKED_AS_FAILED is treated as the failure state for alerting purposes.
 //
-// NewBuilds is populated when a known artefact's version serial advances and its
-// BuildLog is BUILT — confirming a new successful image is available. Artefacts
-// with no prior version (first boot / NewArtefacts) are excluded to avoid bulk noise.
+// NewBuilds is populated when a known artefact's BuildLog transitions to BUILT,
+// covering two cases:
+//  1. The version serial advanced AND the build log is BUILT (build completed in a
+//     new day's serial).
+//  2. The version serial is unchanged but the build log just became BUILT (build
+//     completed within the same serial window — e.g. IN_PROGRESS → BUILT between
+//     two cron runs on the same day).
+//
+// Artefacts with no prior version (first boot / NewArtefacts) are excluded to
+// avoid bulk noise on startup.
 func Diff(old, fresh []domain.Artefact) domain.ChangeReport {
 	oldByID := make(map[int]domain.Artefact, len(old))
 	for _, a := range old {
@@ -73,8 +80,12 @@ func Diff(old, fresh []domain.Artefact) domain.ChangeReport {
 			continue
 		}
 
-		// Detect a new successful build: version advanced and build log confirms BUILT.
-		if a.Version != prev.Version && prev.Version != "" && a.BuildLog == domain.BuildStatusBuilt {
+		// Detect a new successful build. Two conditions trigger this:
+		//   • version advanced (new day's serial) AND build log is BUILT, OR
+		//   • same version but build log just transitioned to BUILT (e.g. IN_PROGRESS
+		//     → BUILT between cron runs on the same day).
+		// In both cases we require a known prior version to exclude first-boot noise.
+		if prev.Version != "" && a.BuildLog == domain.BuildStatusBuilt && prev.BuildLog != domain.BuildStatusBuilt {
 			report.NewBuilds = append(report.NewBuilds, a)
 		}
 
