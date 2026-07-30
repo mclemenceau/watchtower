@@ -78,7 +78,7 @@ func TestFormatBuildsStatusRelease_ColumnHeaders(t *testing.T) {
 	artefacts := []domain.Artefact{
 		{ID: 1, Name: "ubuntu-desktop-amd64", OS: "ubuntu", Release: "noble", Version: today},
 	}
-	out := FormatBuildsStatusRelease(artefacts, "noble", "")
+	out := FormatBuildsStatusRelease(artefacts, "noble", "", domain.FailureStore{})
 	for _, want := range []string{"ID", "Artefact", "Product", "Version", "Age", "Build", "Log"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("FormatBuildsStatusRelease missing column header %q, got:\n%s", want, out)
@@ -90,7 +90,7 @@ func TestFormatBuildsStatusRelease_ArtefactRow(t *testing.T) {
 	artefacts := []domain.Artefact{
 		{ID: 1, Name: "ubuntu-desktop-amd64", OS: "ubuntu", Release: "noble", Version: today},
 	}
-	out := FormatBuildsStatusRelease(artefacts, "noble", "")
+	out := FormatBuildsStatusRelease(artefacts, "noble", "", domain.FailureStore{})
 	if !strings.Contains(out, "ubuntu-desktop-amd64") {
 		t.Errorf("expected artefact name in output, got:\n%s", out)
 	}
@@ -107,7 +107,7 @@ func TestFormatBuildsStatusRelease_LogLinkPresent(t *testing.T) {
 	artefacts := []domain.Artefact{
 		{ID: 1, Name: "ubuntu-server-amd64", OS: "ubuntu-server", Release: "noble", Version: "20200101", ImageURL: imageURL},
 	}
-	out := FormatBuildsStatusRelease(artefacts, "noble", "")
+	out := FormatBuildsStatusRelease(artefacts, "noble", "", domain.FailureStore{})
 	wantLink := "[🔗](" + logURL + ")"
 	if !strings.Contains(out, wantLink) {
 		t.Errorf("expected Markdown log link %q, got:\n%s", wantLink, out)
@@ -115,7 +115,7 @@ func TestFormatBuildsStatusRelease_LogLinkPresent(t *testing.T) {
 }
 
 func TestFormatBuildsStatusRelease_EmptySnapshot(t *testing.T) {
-	out := FormatBuildsStatusRelease(nil, "noble", "")
+	out := FormatBuildsStatusRelease(nil, "noble", "", domain.FailureStore{})
 	if !strings.Contains(out, "No snapshot") {
 		t.Errorf("expected 'No snapshot' message, got: %s", out)
 	}
@@ -125,7 +125,7 @@ func TestFormatBuildsStatusRelease_UnknownRelease(t *testing.T) {
 	artefacts := []domain.Artefact{
 		{ID: 1, Name: "x", OS: "ubuntu", Release: "noble", Version: today},
 	}
-	out := FormatBuildsStatusRelease(artefacts, "nonexistent", "")
+	out := FormatBuildsStatusRelease(artefacts, "nonexistent", "", domain.FailureStore{})
 	if !strings.Contains(out, "No artefacts found") {
 		t.Errorf("expected 'No artefacts found' message, got: %s", out)
 	}
@@ -136,7 +136,7 @@ func TestFormatBuildsStatusRelease_ProductFilter(t *testing.T) {
 		{ID: 1, Name: "ubuntu-desktop-amd64", OS: "ubuntu", Release: "noble", Version: today},
 		{ID: 2, Name: "ubuntu-server-amd64", OS: "ubuntu-server", Release: "noble", Version: today},
 	}
-	out := FormatBuildsStatusRelease(artefacts, "noble", "ubuntu-server")
+	out := FormatBuildsStatusRelease(artefacts, "noble", "ubuntu-server", domain.FailureStore{})
 	if !strings.Contains(out, "ubuntu-server-amd64") {
 		t.Errorf("expected ubuntu-server-amd64 in output, got:\n%s", out)
 	}
@@ -155,7 +155,7 @@ func TestFormatBuildsStatusRelease_FailedWithDescription(t *testing.T) {
 			BuildFailureDescription: "cdimage crashed before submitting builds to Launchpad",
 		},
 	}
-	out := FormatBuildsStatusRelease(artefacts, "stonking", "")
+	out := FormatBuildsStatusRelease(artefacts, "stonking", "", domain.FailureStore{})
 	want := "❌ INFRA: cdimage crashed before submitting builds to Launchpad"
 	if !strings.Contains(out, want) {
 		t.Errorf("expected %q in output, got:\n%s", want, out)
@@ -173,7 +173,7 @@ func TestFormatBuildsStatusRelease_FailedKindNoDescription(t *testing.T) {
 			BuildFailureKind: domain.BuildFailureKindProduct,
 		},
 	}
-	out := FormatBuildsStatusRelease(artefacts, "stonking", "")
+	out := FormatBuildsStatusRelease(artefacts, "stonking", "", domain.FailureStore{})
 	if !strings.Contains(out, "❌ PRODUCT") {
 		t.Errorf("expected '❌ PRODUCT' in output, got:\n%s", out)
 	}
@@ -192,12 +192,73 @@ func TestFormatBuildsStatusRelease_FailedNoKind(t *testing.T) {
 			BuildLog: domain.BuildStatusFailed,
 		},
 	}
-	out := FormatBuildsStatusRelease(artefacts, "stonking", "")
+	out := FormatBuildsStatusRelease(artefacts, "stonking", "", domain.FailureStore{})
 	if !strings.Contains(out, "❌") {
 		t.Errorf("expected ❌ in output, got:\n%s", out)
 	}
 	if strings.Contains(out, "INFRA") || strings.Contains(out, "PRODUCT") {
 		t.Errorf("expected no kind label when BuildFailureKind is empty, got:\n%s", out)
+	}
+}
+
+func TestFormatBuildsStatusRelease_ProductFailureUsesLibrarianURL(t *testing.T) {
+	// A PRODUCT failure with a resolved LibrarianURL in the FailureStore must
+	// render the second-hop librarian URL in the Log column, not the cd-build-log.
+	libURL := "https://launchpadlibrarian.net/12345/buildlog.txt.gz"
+	imageURL := "https://cdimage.ubuntu.com/ubuntu/noble/daily-live/20260101/noble-desktop-amd64.iso"
+	art := domain.Artefact{
+		ID:               42,
+		Name:             "noble-desktop-amd64",
+		OS:               "ubuntu",
+		Release:          "noble",
+		Version:          "20260101",
+		ImageURL:         imageURL,
+		BuildLog:         domain.BuildStatusFailed,
+		BuildFailureKind: domain.BuildFailureKindProduct,
+	}
+
+	fs := make(domain.FailureStore)
+	fs.UpsertFailure(art)
+	fs.SetAnalysis(
+		42, "noble", "ubuntu",
+		domain.LogAnalysis{Category: "dependency", Hypothesis: "missing dep"},
+		"20260101", "", libURL,
+	)
+
+	out := FormatBuildsStatusRelease([]domain.Artefact{art}, "noble", "", fs)
+	wantLink := "[🔗](" + libURL + ")"
+	if !strings.Contains(out, wantLink) {
+		t.Errorf("expected librarian link %q in output, got:\n%s", wantLink, out)
+	}
+
+	// Must NOT contain the first-hop cd-build-log URL for today's date.
+	todayDate := time.Now().UTC().Format("20060102")
+	cdLogURL := "cd-build-logs/ubuntu/noble/daily-live-" + todayDate + ".log"
+	if strings.Contains(out, cdLogURL) {
+		t.Errorf("expected cd-build-log URL to be replaced by librarian URL, got:\n%s", out)
+	}
+}
+
+func TestFormatBuildsStatusRelease_InfraFailureUsesCdBuildLog(t *testing.T) {
+	// An INFRA failure must always use the first-hop cd-build-log, even if
+	// somehow a LivefsLogURL were present (it shouldn't be, but defensive check).
+	imageURL := "https://cdimage.ubuntu.com/ubuntu/noble/daily-live/20260101/noble-desktop-amd64.iso"
+	art := domain.Artefact{
+		ID:               43,
+		Name:             "noble-desktop-amd64",
+		OS:               "ubuntu",
+		Release:          "noble",
+		Version:          "20260101",
+		ImageURL:         imageURL,
+		BuildLog:         domain.BuildStatusFailed,
+		BuildFailureKind: domain.BuildFailureKindInfra,
+	}
+
+	out := FormatBuildsStatusRelease([]domain.Artefact{art}, "noble", "", domain.FailureStore{})
+	todayDate := time.Now().UTC().Format("20060102")
+	wantCDLog := "cd-build-logs/ubuntu/noble/daily-live-" + todayDate + ".log"
+	if !strings.Contains(out, wantCDLog) {
+		t.Errorf("expected cd-build-log link %q for INFRA failure, got:\n%s", wantCDLog, out)
 	}
 }
 

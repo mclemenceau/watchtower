@@ -405,17 +405,28 @@ func (a *Activities) AnalyseFailures(ctx context.Context, artefacts []domain.Art
 		// cd-build-log in that case, so INFRA failures still get analysed.
 		// reclassify is non-empty when log resolution reveals a kind mismatch
 		// (e.g. PRODUCT → INFRA when LP ran the build but produced no log).
-		analysis, reclassify, _, err := logutil.AnalyzeLog(
+		analysis, reclassify, src, err := logutil.AnalyzeLog(
 			ctx, art, a.LogFetcher, a.Launchpad, a.LLM,
 		)
 		if err != nil {
 			// Non-fatal: one bad LLM or fetch call should not abort the run.
 			continue
 		}
+
+		// Capture the librarian URL so the builds status formatter can link
+		// directly to the livefs build log for PRODUCT failures. The URL is
+		// only stored when the two-hop resolved to a Launchpad librarian log
+		// (recognisable by its host). For cd-build-log fallbacks the URL is
+		// omitted so the formatter keeps using the first-hop link instead.
+		var livefLogURL string
+		if strings.HasPrefix(src.URL, "https://launchpadlibrarian.net") {
+			livefLogURL = src.URL
+		}
+
 		store.SetAnalysis(
 			rec.ArtefactID, rec.Release, rec.Product,
 			analysis, rec.LastSeenVersion,
-			reclassify,
+			reclassify, livefLogURL,
 		)
 	}
 

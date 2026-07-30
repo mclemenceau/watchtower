@@ -179,6 +179,7 @@ type FailureRecord struct {
 	FailureKind        BuildFailureKind `json:"failure_kind,omitempty"`        // INFRA | PRODUCT — deterministic classification from log parsing
 	FailureDescription string           `json:"failure_description,omitempty"` // short human-readable reason
 	FailureSignature   string           `json:"failure_signature,omitempty"`   // canonical slug from ExtractFailureSignature or LLM; enables cross-artefact grouping
+	LivefsLogURL       string           `json:"livefs_log_url,omitempty"`      // Launchpad librarian URL resolved via two-hop; non-empty only for PRODUCT failures
 	Analysis           *LogAnalysis     `json:"analysis,omitempty"`            // nil until FailureAnalysisWorkflow runs
 	AnalysedVersion    string           `json:"analysed_version,omitempty"`    // version the analysis was done on
 	AnalysedAt         *time.Time       `json:"analysed_at,omitempty"`
@@ -313,12 +314,19 @@ func (fs FailureStore) PendingAnalysis(max int) []FailureRecord {
 // used when log resolution reveals that a previously-classified PRODUCT failure
 // is actually an infrastructure failure — for example when Launchpad ran the
 // build but produced no log (ErrNoLPLog).
+//
+// livefLogURL is the Launchpad librarian URL resolved during two-hop log
+// resolution. It is stored on the record so that the builds status formatter
+// can link directly to the livefs build log for PRODUCT failures instead of
+// the first-hop cd-build-log. Pass "" when not applicable (INFRA failures or
+// when only the cd-build-log was available).
 func (fs FailureStore) SetAnalysis(
 	artefactID int,
 	release, product string,
 	analysis LogAnalysis,
 	version string,
 	reclassify BuildFailureKind,
+	livefLogURL string,
 ) {
 	records := fs[release][product]
 	now := time.Now().UTC()
@@ -336,11 +344,30 @@ func (fs FailureStore) SetAnalysis(
 				// kind supersedes what ParseBuildStatusFromLog set.
 				records[i].FailureDescription = analysis.Hypothesis
 			}
+			if livefLogURL != "" {
+				records[i].LivefsLogURL = livefLogURL
+			}
 		}
 	}
 	if fs[release] != nil {
 		fs[release][product] = records
 	}
+}
+
+// FindActive returns a pointer to the first unresolved FailureRecord for the
+// given artefact ID within the release+product bucket, or nil if no such record
+// exists. The returned pointer is into the live slice — callers must not mutate
+// it; use SetAnalysis or UpsertFailure for modifications.
+func (fs FailureStore) FindActive(
+	artefactID int, release, product string,
+) *FailureRecord {
+	records := fs[release][product]
+	for i := range records {
+		if records[i].ArtefactID == artefactID && !records[i].Resolved {
+			return &records[i]
+		}
+	}
+	return nil
 }
 
 // IsBuiltToday returns true if the version's base date (YYYYMMDD) matches today in UTC.

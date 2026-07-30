@@ -123,10 +123,10 @@ func Dispatch(
 		return notifier.Send(FormatBuildsStatusSummary(artefacts))
 
 	case strings.HasPrefix(lower, "builds status ") && len(parts) == 3:
-		return notifier.Send(FormatBuildsStatusRelease(artefacts, parts[2], ""))
+		return notifier.Send(FormatBuildsStatusRelease(artefacts, parts[2], "", failures))
 
 	case strings.HasPrefix(lower, "builds status ") && len(parts) == 4:
-		return notifier.Send(FormatBuildsStatusRelease(artefacts, parts[2], parts[3]))
+		return notifier.Send(FormatBuildsStatusRelease(artefacts, parts[2], parts[3], failures))
 
 	case lower == "builds" || (strings.HasPrefix(lower, "builds") && len(parts) == 2):
 		return notifier.Send("Usage: `builds status` · `builds status <release>` · `builds status <release> <product>`")

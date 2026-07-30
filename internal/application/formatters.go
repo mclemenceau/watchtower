@@ -73,11 +73,32 @@ func FormatBuildsStatusSummary(artefacts []domain.Artefact) string {
 	return sb.String()
 }
 
+// logCellForArtefact returns the Markdown log-link cell for an artefact row in
+// the builds status table. For PRODUCT failures where a librarian URL has been
+// resolved via two-hop analysis, the link points to the livefs build log
+// (second hop) rather than the first-hop cd-build-log. For all other states
+// the standard LogCell (cd-build-log for today) is used.
+func logCellForArtefact(art domain.Artefact, failures domain.FailureStore) string {
+	if art.BuildFailureKind == domain.BuildFailureKindProduct {
+		if rec := failures.FindActive(art.ID, art.Release, art.OS); rec != nil &&
+			rec.LivefsLogURL != "" {
+			return fmt.Sprintf("[🔗](%s)", rec.LivefsLogURL)
+		}
+	}
+	return domain.LogCell(art.ImageURL)
+}
+
 // FormatBuildsStatusRelease renders a detail table for a single release: one row per
 // artefact with name, version, age and build status. When product is non-empty only
 // artefacts whose OS matches (case-insensitive) are shown.
 // Returns an appropriate message when no artefacts match.
-func FormatBuildsStatusRelease(artefacts []domain.Artefact, release, product string) string {
+// failures is used to look up the resolved livefs (Launchpad librarian) log URL for
+// PRODUCT failures — those rows link to the second-hop log instead of the cd-build-log.
+func FormatBuildsStatusRelease(
+	artefacts []domain.Artefact,
+	release, product string,
+	failures domain.FailureStore,
+) string {
 	if len(artefacts) == 0 {
 		return "No snapshot available yet — the first fetch is still in progress."
 	}
@@ -119,7 +140,8 @@ func FormatBuildsStatusRelease(artefacts []domain.Artefact, release, product str
 	sb.WriteString("|----|----------|---------|---------|-----|-------|-----|\n")
 	for _, art := range filtered {
 		fmt.Fprintf(&sb, "| %d | %s | %s | %s | %s | %s | %s |\n",
-			art.ID, art.Name, art.OS, art.Version, domain.ImageAge(art.Version), artefactStatusCell(art), domain.LogCell(art.ImageURL))
+			art.ID, art.Name, art.OS, art.Version, domain.ImageAge(art.Version),
+			artefactStatusCell(art), logCellForArtefact(art, failures))
 	}
 	return sb.String()
 }

@@ -836,7 +836,7 @@ func TestPendingAnalysis_SkipsAlreadyAnalysed(t *testing.T) {
 		Category:   "dependency",
 		Hypothesis: "libfoo missing",
 	}
-	fs.SetAnalysis(40, "noble", "ubuntu", analysis, "20260101", "")
+	fs.SetAnalysis(40, "noble", "ubuntu", analysis, "20260101", "", "")
 
 	pending := fs.PendingAnalysis(10)
 	if len(pending) != 0 {
@@ -1021,7 +1021,7 @@ func TestSetAnalysis_PropagatesSignature(t *testing.T) {
 		Hypothesis: "libfoo missing from archive",
 		Signature:  "apt:missing:libfoo-dev",
 	}
-	fs.SetAnalysis(10, "stonking", "ubuntu", analysis, "20260701", "")
+	fs.SetAnalysis(10, "stonking", "ubuntu", analysis, "20260701", "", "")
 
 	recs := fs.ActiveFailures("stonking", "ubuntu")
 	if len(recs) != 1 {
@@ -1030,5 +1030,69 @@ func TestSetAnalysis_PropagatesSignature(t *testing.T) {
 	if recs[0].FailureSignature != "apt:missing:libfoo-dev" {
 		t.Errorf("FailureSignature = %q, want %q",
 			recs[0].FailureSignature, "apt:missing:libfoo-dev")
+	}
+}
+
+// --- FindActive ---
+
+func TestFindActive_ReturnsMatchingRecord(t *testing.T) {
+	fs := make(FailureStore)
+	fs.UpsertFailure(Artefact{
+		ID: 5, Name: "noble-server-amd64", Release: "noble", OS: "ubuntu-server",
+		BuildLog: BuildStatusFailed, BuildFailureKind: BuildFailureKindProduct,
+		Version: "20260701",
+	})
+
+	rec := fs.FindActive(5, "noble", "ubuntu-server")
+	if rec == nil {
+		t.Fatal("expected non-nil record for artefact 5")
+	}
+	if rec.ArtefactID != 5 {
+		t.Errorf("ArtefactID = %d, want 5", rec.ArtefactID)
+	}
+}
+
+func TestFindActive_ReturnsNilWhenNotFound(t *testing.T) {
+	fs := make(FailureStore)
+	if rec := fs.FindActive(99, "noble", "ubuntu"); rec != nil {
+		t.Errorf("expected nil for missing artefact, got %+v", rec)
+	}
+}
+
+func TestFindActive_ReturnsNilWhenResolved(t *testing.T) {
+	fs := make(FailureStore)
+	fs.UpsertFailure(Artefact{
+		ID: 6, Name: "noble-server-amd64", Release: "noble", OS: "ubuntu",
+		BuildLog: BuildStatusFailed, BuildFailureKind: BuildFailureKindProduct,
+		Version: "20260701",
+	})
+	fs.ResolveFailure(6, "noble", "ubuntu")
+
+	if rec := fs.FindActive(6, "noble", "ubuntu"); rec != nil {
+		t.Errorf("expected nil for resolved record, got %+v", rec)
+	}
+}
+
+func TestSetAnalysis_StoresLivefsLogURL(t *testing.T) {
+	fs := make(FailureStore)
+	fs.UpsertFailure(Artefact{
+		ID: 20, Name: "noble-desktop-amd64", Release: "noble", OS: "ubuntu",
+		BuildLog: BuildStatusFailed, BuildFailureKind: BuildFailureKindProduct,
+		Version: "20260702",
+	})
+
+	libURL := "https://launchpadlibrarian.net/99999/buildlog.txt.gz"
+	fs.SetAnalysis(
+		20, "noble", "ubuntu",
+		LogAnalysis{Category: "dependency", Hypothesis: "missing pkg"},
+		"20260702", "", libURL,
+	)
+
+	rec := fs.FindActive(20, "noble", "ubuntu")
+	if rec == nil {
+		t.Fatal("expected active record")
+	}
+	if rec.LivefsLogURL != libURL {
+		t.Errorf("LivefsLogURL = %q, want %q", rec.LivefsLogURL, libURL)
 	}
 }
