@@ -2,6 +2,7 @@ package activities
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -235,5 +236,123 @@ func TestEnrichBuildStatus_TodayMissingYesterdayFailed(t *testing.T) {
 	}
 	if result[0].BuildFailureKind != domain.BuildFailureKindProduct {
 		t.Errorf("BuildFailureKind = %q, want %q", result[0].BuildFailureKind, domain.BuildFailureKindProduct)
+	}
+}
+
+// stubLaunchpadSource implements ports.LaunchpadSource for tests.
+// logURL is returned for every call when err is nil; a non-empty logURL
+// simulates a build that produced a log, "" simulates build_log_url == null.
+type stubLaunchpadSource struct {
+	logURL string
+	err    error
+}
+
+func (s *stubLaunchpadSource) FetchBuildLogURL(
+	_ context.Context, _ string,
+) (string, error) {
+	return s.logURL, s.err
+}
+
+var _ ports.LaunchpadSource = (*stubLaunchpadSource)(nil)
+
+// failedLogWithLPURL returns a cd-build-log where the arch failed and
+// contains a Launchpad build page URL for the given arch.
+func failedLogWithLPURL(arch, buildPageURL string) string {
+	return arch + " on Launchpad starting at 2026-07-27 06:00:00\n" +
+		arch + ": " + buildPageURL + "\n" +
+		arch + " on Launchpad finished at 2026-07-27 07:00:00 (Failed to build)\n"
+}
+
+// TestEnrichBuildStatus_ProductFailureNullLPLog: PRODUCT failure where
+// Launchpad reports build_log_url == null. Must be reclassified as INFRA.
+func TestEnrichBuildStatus_ProductFailureNullLPLog(t *testing.T) {
+	today, _ := todayYesterday()
+	art := artefactForTest("ubuntu-base", "stonking", "daily", "20260725", "amd64")
+	lpBuildURL := "https://launchpad.net/~ubuntu-cdimage/+livefs/ubuntu/stonking/ubuntu-base/+build/1000007"
+
+	fetcher := &stubLogFetcher{logs: map[string]string{
+		logURL("ubuntu-base", "stonking", "daily", today): failedLogWithLPURL(
+			"ubuntu-base-amd64", lpBuildURL,
+		),
+	}}
+	// LP is reachable but build_log_url is null.
+	lp := &stubLaunchpadSource{logURL: "", err: nil}
+	acts := &Activities{LogFetcher: fetcher, Launchpad: lp}
+
+	result, err := acts.EnrichBuildStatus(context.Background(), []domain.Artefact{art})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result[0].BuildLog != domain.BuildStatusFailed {
+		t.Errorf("BuildLog = %q, want %q", result[0].BuildLog, domain.BuildStatusFailed)
+	}
+	if result[0].BuildFailureKind != domain.BuildFailureKindInfra {
+		t.Errorf("BuildFailureKind = %q, want INFRA (null LP log must reclassify from PRODUCT)",
+			result[0].BuildFailureKind)
+	}
+	if !strings.Contains(result[0].BuildFailureDescription, "no log") {
+		t.Errorf("BuildFailureDescription %q should mention 'no log'",
+			result[0].BuildFailureDescription)
+	}
+}
+
+// TestEnrichBuildStatus_ProductFailureLPLogPresent: PRODUCT failure where
+// Launchpad returns a real log URL. Must stay PRODUCT.
+func TestEnrichBuildStatus_ProductFailureLPLogPresent(t *testing.T) {
+	today, _ := todayYesterday()
+	art := artefactForTest("ubuntu-base", "stonking", "daily", "20260725", "amd64")
+	lpBuildURL := "https://launchpad.net/~ubuntu-cdimage/+livefs/ubuntu/stonking/ubuntu-base/+build/1000007"
+
+	fetcher := &stubLogFetcher{logs: map[string]string{
+		logURL("ubuntu-base", "stonking", "daily", today): failedLogWithLPURL(
+			"ubuntu-base-amd64", lpBuildURL,
+		),
+	}}
+	// LP is reachable and a log URL is available.
+	lp := &stubLaunchpadSource{
+		logURL: "https://launchpadlibrarian.net/123/buildlog.txt.gz",
+		err:    nil,
+	}
+	acts := &Activities{LogFetcher: fetcher, Launchpad: lp}
+
+	result, err := acts.EnrichBuildStatus(context.Background(), []domain.Artefact{art})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result[0].BuildLog != domain.BuildStatusFailed {
+		t.Errorf("BuildLog = %q, want %q", result[0].BuildLog, domain.BuildStatusFailed)
+	}
+	if result[0].BuildFailureKind != domain.BuildFailureKindProduct {
+		t.Errorf("BuildFailureKind = %q, want PRODUCT (LP log present means real product failure)",
+			result[0].BuildFailureKind)
+	}
+}
+
+// TestEnrichBuildStatus_ProductFailureLPUnreachable: PRODUCT failure where
+// Launchpad returns an error (unreachable). Must stay PRODUCT.
+func TestEnrichBuildStatus_ProductFailureLPUnreachable(t *testing.T) {
+	today, _ := todayYesterday()
+	art := artefactForTest("ubuntu-base", "stonking", "daily", "20260725", "amd64")
+	lpBuildURL := "https://launchpad.net/~ubuntu-cdimage/+livefs/ubuntu/stonking/ubuntu-base/+build/1000007"
+
+	fetcher := &stubLogFetcher{logs: map[string]string{
+		logURL("ubuntu-base", "stonking", "daily", today): failedLogWithLPURL(
+			"ubuntu-base-amd64", lpBuildURL,
+		),
+	}}
+	// LP is unreachable.
+	lp := &stubLaunchpadSource{logURL: "", err: errors.New("connection refused")}
+	acts := &Activities{LogFetcher: fetcher, Launchpad: lp}
+
+	result, err := acts.EnrichBuildStatus(context.Background(), []domain.Artefact{art})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result[0].BuildLog != domain.BuildStatusFailed {
+		t.Errorf("BuildLog = %q, want %q", result[0].BuildLog, domain.BuildStatusFailed)
+	}
+	if result[0].BuildFailureKind != domain.BuildFailureKindProduct {
+		t.Errorf("BuildFailureKind = %q, want PRODUCT (LP unreachable must not mask classification)",
+			result[0].BuildFailureKind)
 	}
 }

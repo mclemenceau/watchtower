@@ -81,6 +81,14 @@ func (a *Activities) FetchTestExecutions(ctx context.Context, artefacts []domain
 // started yet but yesterday's log contains a meaningful result (e.g. LP built
 // successfully but cdimage crashed before submitting to Test Observer).
 //
+// When a.Launchpad is set and ParseBuildStatusFromLog returns a PRODUCT failure,
+// EnrichBuildStatus performs a second-hop check: it resolves the Launchpad build
+// page URL from the cd-build-log and calls FetchBuildLogURL. If Launchpad
+// reports build_log_url as null (returned as ("", nil)), the failure is
+// reclassified as INFRA — the build ran on Launchpad but produced no log,
+// which is an infrastructure problem, not a product defect. If the Launchpad
+// call fails (unreachable), the PRODUCT classification is kept as-is.
+//
 // The enriched slice is returned; the input slice is not modified.
 func (a *Activities) EnrichBuildStatus(ctx context.Context, artefacts []domain.Artefact) ([]domain.Artefact, error) {
 	enriched := make([]domain.Artefact, len(artefacts))
@@ -140,6 +148,29 @@ func (a *Activities) EnrichBuildStatus(ctx context.Context, artefacts []domain.A
 		// the arch. For preinstalled builds the log uses "{arch}-{variant}" labels;
 		// ResolveLogLabel returns the appropriate canonical variant (e.g. "amd64-generic").
 		status, failureKind, failureDesc := domain.ParseBuildStatusFromLog(content, label)
+
+		// Second-hop check: when LP is configured and the initial parse yields a
+		// PRODUCT failure, verify whether the Launchpad build actually produced a
+		// log. "Failed to build" with build_log_url == null means the builder
+		// accepted and ran the job but never attached a log — an infrastructure
+		// failure, not a product defect. Reclassify to INFRA so the failure is
+		// not misattributed to the product team.
+		if failureKind == domain.BuildFailureKindProduct && a.Launchpad != nil {
+			lpURLs := domain.ParseLaunchpadBuildURLs(content)
+			buildPageURL := logutil.MatchLaunchpadURL(lpURLs, arch)
+			if buildPageURL != "" {
+				librarianURL, lpErr := a.Launchpad.FetchBuildLogURL(ctx, buildPageURL)
+				if lpErr == nil && librarianURL == "" {
+					// build_log_url is null: LP ran the build but produced no log.
+					failureKind = domain.BuildFailureKindInfra
+					failureDesc = "Launchpad build produced no log " +
+						"(builder accepted the job but never attached a log)"
+				}
+				// If lpErr != nil, LP is unreachable — keep the PRODUCT
+				// classification rather than masking it.
+			}
+		}
+
 		enriched[i].BuildLog = status
 		enriched[i].BuildFailureKind = failureKind
 		enriched[i].BuildFailureDescription = failureDesc
