@@ -212,6 +212,11 @@ func (fs FailureStore) UpsertFailure(art Artefact) bool {
 			// change if the failure kind or description changes across versions.
 			records[i].FailureKind = art.BuildFailureKind
 			records[i].FailureDescription = art.BuildFailureDescription
+			if art.BuildFailureKind == BuildFailureKindInfra {
+				records[i].FailureSignature = InfraSignatureFor(
+					art.BuildFailureDescription,
+				)
+			}
 			// If the version changed since the last analysis, the old analysis
 			// may no longer be accurate — clear it so re-analysis is triggered.
 			if records[i].Analysis != nil && records[i].AnalysedVersion != art.Version {
@@ -225,7 +230,7 @@ func (fs FailureStore) UpsertFailure(art Artefact) bool {
 	}
 
 	// New failure record.
-	fs[art.Release][art.OS] = append(records, FailureRecord{
+	newRec := FailureRecord{
 		ArtefactID:         art.ID,
 		ArtefactName:       art.Name,
 		Release:            art.Release,
@@ -235,7 +240,11 @@ func (fs FailureStore) UpsertFailure(art Artefact) bool {
 		Occurrences:        1,
 		FailureKind:        art.BuildFailureKind,
 		FailureDescription: art.BuildFailureDescription,
-	})
+	}
+	if art.BuildFailureKind == BuildFailureKindInfra {
+		newRec.FailureSignature = InfraSignatureFor(art.BuildFailureDescription)
+	}
+	fs[art.Release][art.OS] = append(records, newRec)
 	return true
 }
 
@@ -964,4 +973,30 @@ func GroupBySignature(records []FailureRecord) map[string][]FailureRecord {
 		out[r.FailureSignature] = append(out[r.FailureSignature], r)
 	}
 	return out
+}
+
+// InfraSignatureFor returns a canonical slug for a known INFRA failure
+// description, enabling cross-artefact grouping without LLM analysis.
+// Returns "" for unrecognised or empty descriptions (no signature assigned).
+//
+// The two distinct wordings for "Launchpad produced no log" are normalised
+// to the same slug so that records created via different code paths are
+// grouped together correctly.
+func InfraSignatureFor(desc string) string {
+	switch desc {
+	case "Launchpad build produced no log (builder accepted the job but never attached a log)",
+		"launchpad build completed with no log available":
+		return "infra:lp-no-log"
+	case "LP build succeeded but cdimage crashed during publishing":
+		return "infra:cdimage-publish-crash"
+	case "LP build succeeded but image could not be submitted to Test Observer":
+		return "infra:to-submit-failure"
+	case "cdimage crashed mid-run, build was orphaned":
+		return "infra:cdimage-midrun-crash"
+	case "cdimage crashed before submitting builds to Launchpad":
+		return "infra:cdimage-presubmit-crash"
+	case "Launchpad builder reported a chroot problem":
+		return "infra:lp-chroot-problem"
+	}
+	return ""
 }

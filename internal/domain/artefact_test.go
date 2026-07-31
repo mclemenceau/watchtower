@@ -1096,3 +1096,125 @@ func TestSetAnalysis_StoresLivefsLogURL(t *testing.T) {
 		t.Errorf("LivefsLogURL = %q, want %q", rec.LivefsLogURL, libURL)
 	}
 }
+
+// --- InfraSignatureFor ---
+
+func TestInfraSignatureFor_KnownDescriptions(t *testing.T) {
+	cases := []struct {
+		desc string
+		want string
+	}{
+		{
+			"Launchpad build produced no log (builder accepted the job but never attached a log)",
+			"infra:lp-no-log",
+		},
+		{
+			// alternate wording from the ErrNoLPLog path
+			"launchpad build completed with no log available",
+			"infra:lp-no-log",
+		},
+		{
+			"LP build succeeded but cdimage crashed during publishing",
+			"infra:cdimage-publish-crash",
+		},
+		{
+			"LP build succeeded but image could not be submitted to Test Observer",
+			"infra:to-submit-failure",
+		},
+		{
+			"cdimage crashed mid-run, build was orphaned",
+			"infra:cdimage-midrun-crash",
+		},
+		{
+			"cdimage crashed before submitting builds to Launchpad",
+			"infra:cdimage-presubmit-crash",
+		},
+		{
+			"Launchpad builder reported a chroot problem",
+			"infra:lp-chroot-problem",
+		},
+	}
+	for _, tc := range cases {
+		got := InfraSignatureFor(tc.desc)
+		if got != tc.want {
+			t.Errorf("InfraSignatureFor(%q) = %q, want %q",
+				tc.desc, got, tc.want)
+		}
+	}
+}
+
+func TestInfraSignatureFor_UnknownReturnsEmpty(t *testing.T) {
+	for _, desc := range []string{
+		"", "some random description", "PRODUCT error",
+	} {
+		if got := InfraSignatureFor(desc); got != "" {
+			t.Errorf("InfraSignatureFor(%q) = %q, want empty",
+				desc, got)
+		}
+	}
+}
+
+// --- UpsertFailure INFRA signature ---
+
+func TestUpsertFailure_InfraRecordGetsSignature(t *testing.T) {
+	store := make(FailureStore)
+	art := Artefact{
+		ID: 1, Name: "noble-base-amd64.tar.gz",
+		OS: "ubuntu-base", Release: "noble",
+		Version:                 "20260731",
+		BuildFailureKind:        BuildFailureKindInfra,
+		BuildFailureDescription: "Launchpad build produced no log (builder accepted the job but never attached a log)",
+	}
+
+	store.UpsertFailure(art)
+
+	rec := store["noble"]["ubuntu-base"][0]
+	if rec.FailureSignature != "infra:lp-no-log" {
+		t.Errorf("FailureSignature = %q, want %q",
+			rec.FailureSignature, "infra:lp-no-log")
+	}
+}
+
+func TestUpsertFailure_InfraSignatureRefreshedOnUpdate(t *testing.T) {
+	store := make(FailureStore)
+	art := Artefact{
+		ID: 1, Name: "noble-base-amd64.tar.gz",
+		OS: "ubuntu-base", Release: "noble",
+		Version:                 "20260730",
+		BuildFailureKind:        BuildFailureKindInfra,
+		BuildFailureDescription: "Launchpad build produced no log (builder accepted the job but never attached a log)",
+	}
+	store.UpsertFailure(art)
+
+	// Second failure with a different INFRA description.
+	art.Version = "20260731"
+	art.BuildFailureDescription = "LP build succeeded but cdimage crashed during publishing"
+	store.UpsertFailure(art)
+
+	rec := store["noble"]["ubuntu-base"][0]
+	if rec.FailureSignature != "infra:cdimage-publish-crash" {
+		t.Errorf("FailureSignature after update = %q, want %q",
+			rec.FailureSignature, "infra:cdimage-publish-crash")
+	}
+	if rec.Occurrences != 2 {
+		t.Errorf("Occurrences = %d, want 2", rec.Occurrences)
+	}
+}
+
+func TestUpsertFailure_ProductRecordGetsNoSignature(t *testing.T) {
+	store := make(FailureStore)
+	art := Artefact{
+		ID: 2, Name: "noble-desktop-amd64.iso",
+		OS: "ubuntu", Release: "noble",
+		Version:                 "20260731",
+		BuildFailureKind:        BuildFailureKindProduct,
+		BuildFailureDescription: "Failed to build",
+	}
+	store.UpsertFailure(art)
+
+	rec := store["noble"]["ubuntu"][0]
+	if rec.FailureSignature != "" {
+		t.Errorf("PRODUCT record should have no signature, got %q",
+			rec.FailureSignature)
+	}
+}

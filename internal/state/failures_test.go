@@ -169,3 +169,78 @@ func TestPendingAnalysis(t *testing.T) {
 		t.Errorf("expected 4 pending (uncapped), got %d", len(all))
 	}
 }
+
+// --- Backfill INFRA signatures on ReadFailures ---
+
+func TestReadFailures_BackfillsInfraSignatures(t *testing.T) {
+	path := t.TempDir() + "/failures.json"
+	fs := state.NewFailureState(path)
+
+	// Write a store that has an INFRA record with no signature (simulating
+	// records created before InfraSignatureFor was introduced).
+	store := make(domain.FailureStore)
+	art := domain.Artefact{
+		ID: 10, Name: "noble-base-amd64.tar.gz",
+		OS: "ubuntu-base", Release: "noble",
+		Version:                 "20260731",
+		BuildFailureKind:        domain.BuildFailureKindInfra,
+		BuildFailureDescription: "Launchpad build produced no log (builder accepted the job but never attached a log)",
+	}
+	store.UpsertFailure(art)
+
+	// Clear the signature to simulate an old record without one.
+	store["noble"]["ubuntu-base"][0].FailureSignature = ""
+	if err := fs.WriteFailures(store); err != nil {
+		t.Fatalf("WriteFailures: %v", err)
+	}
+
+	loaded, err := fs.ReadFailures()
+	if err != nil {
+		t.Fatalf("ReadFailures: %v", err)
+	}
+
+	rec := loaded["noble"]["ubuntu-base"][0]
+	if rec.FailureSignature != "infra:lp-no-log" {
+		t.Errorf("backfill: FailureSignature = %q, want %q",
+			rec.FailureSignature, "infra:lp-no-log")
+	}
+
+	// Second read: backfill already persisted, no second pass needed.
+	// The signature should still be present.
+	loaded2, err := fs.ReadFailures()
+	if err != nil {
+		t.Fatalf("second ReadFailures: %v", err)
+	}
+	rec2 := loaded2["noble"]["ubuntu-base"][0]
+	if rec2.FailureSignature != "infra:lp-no-log" {
+		t.Errorf("second read: FailureSignature = %q, want %q",
+			rec2.FailureSignature, "infra:lp-no-log")
+	}
+}
+
+func TestReadFailures_NoBackfillForProductRecords(t *testing.T) {
+	path := t.TempDir() + "/failures.json"
+	fs := state.NewFailureState(path)
+
+	store := make(domain.FailureStore)
+	store.UpsertFailure(domain.Artefact{
+		ID: 5, Name: "noble-desktop-amd64.iso",
+		OS: "ubuntu", Release: "noble",
+		Version:                 "20260731",
+		BuildFailureKind:        domain.BuildFailureKindProduct,
+		BuildFailureDescription: "Failed to build",
+	})
+	if err := fs.WriteFailures(store); err != nil {
+		t.Fatalf("WriteFailures: %v", err)
+	}
+
+	loaded, err := fs.ReadFailures()
+	if err != nil {
+		t.Fatalf("ReadFailures: %v", err)
+	}
+	rec := loaded["noble"]["ubuntu"][0]
+	if rec.FailureSignature != "" {
+		t.Errorf("PRODUCT record should not be backfilled, got %q",
+			rec.FailureSignature)
+	}
+}

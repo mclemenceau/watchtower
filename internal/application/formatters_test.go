@@ -1102,3 +1102,194 @@ func TestFormatNewBuildsNotification_LineFormat(t *testing.T) {
 		t.Errorf("line format mismatch:\n got:  %s\n want: %s", out, want)
 	}
 }
+
+// --- FormatFailuresSummary ---
+
+func infraRec(id int, name, product, release, sig, desc string, occ int) domain.FailureRecord {
+	return domain.FailureRecord{
+		ArtefactID:         id,
+		ArtefactName:       name,
+		Product:            product,
+		Release:            release,
+		FailureKind:        domain.BuildFailureKindInfra,
+		FailureDescription: desc,
+		FailureSignature:   sig,
+		Occurrences:        occ,
+	}
+}
+
+func productRec(id int, name, product, release, sig string) domain.FailureRecord {
+	return domain.FailureRecord{
+		ArtefactID:       id,
+		ArtefactName:     name,
+		Product:          product,
+		Release:          release,
+		FailureKind:      domain.BuildFailureKindProduct,
+		FailureSignature: sig,
+		Occurrences:      1,
+	}
+}
+
+func TestFormatFailuresSummary_NoRecords(t *testing.T) {
+	out := FormatFailuresSummary(nil, "", "")
+	if out != "No active failures detected." {
+		t.Errorf("unexpected: %q", out)
+	}
+	out = FormatFailuresSummary(nil, "noble", "")
+	if out != "No active failures for **noble**." {
+		t.Errorf("unexpected: %q", out)
+	}
+	out = FormatFailuresSummary(nil, "noble", "ubuntu-base")
+	if out != "No active failures for **noble** / **ubuntu-base**." {
+		t.Errorf("unexpected: %q", out)
+	}
+}
+
+func TestFormatFailuresSummary_InfraGroupedCrossProduct(t *testing.T) {
+	// Three INFRA records sharing the same signature across two products.
+	records := []domain.FailureRecord{
+		infraRec(1, "noble-base-amd64.tar.gz", "ubuntu-base", "noble",
+			"infra:lp-no-log",
+			"Launchpad build produced no log (builder accepted the job but never attached a log)", 2),
+		infraRec(2, "noble-base-arm64.tar.gz", "ubuntu-base", "noble",
+			"infra:lp-no-log",
+			"Launchpad build produced no log (builder accepted the job but never attached a log)", 2),
+		infraRec(3, "noble-live-server-s390x.iso", "ubuntu-server", "noble",
+			"infra:lp-no-log",
+			"Launchpad build produced no log (builder accepted the job but never attached a log)", 1),
+	}
+
+	out := FormatFailuresSummary(records, "noble", "")
+
+	// Should have an Infra section header.
+	if !strings.Contains(out, "Infra · noble") {
+		t.Errorf("missing infra section header, got:\n%s", out)
+	}
+	// Should show the shared signature as a group.
+	if !strings.Contains(out, "infra:lp-no-log") {
+		t.Errorf("missing signature, got:\n%s", out)
+	}
+	if !strings.Contains(out, "3 artefacts affected") {
+		t.Errorf("missing artefact count, got:\n%s", out)
+	}
+	// Both products should appear.
+	if !strings.Contains(out, "ubuntu-base") {
+		t.Errorf("missing product ubuntu-base, got:\n%s", out)
+	}
+	if !strings.Contains(out, "ubuntu-server") {
+		t.Errorf("missing product ubuntu-server, got:\n%s", out)
+	}
+	// Description should be shown once.
+	if !strings.Contains(out, "Launchpad build produced no log") {
+		t.Errorf("missing description, got:\n%s", out)
+	}
+	// No per-(release,product) heading for INFRA records.
+	if strings.Contains(out, "noble / ubuntu-base") {
+		t.Errorf("INFRA records should not emit per-product heading, got:\n%s", out)
+	}
+}
+
+func TestFormatFailuresSummary_InfraAndProductSeparated(t *testing.T) {
+	records := []domain.FailureRecord{
+		infraRec(1, "noble-base-amd64.tar.gz", "ubuntu-base", "noble",
+			"infra:lp-no-log", "Launchpad build produced no log (builder accepted the job but never attached a log)", 1),
+		productRec(2, "noble-desktop-amd64.iso", "ubuntu", "noble", "dpkg:passwd"),
+	}
+
+	out := FormatFailuresSummary(records, "", "")
+
+	if !strings.Contains(out, "Infra · noble") {
+		t.Errorf("missing infra section, got:\n%s", out)
+	}
+	if !strings.Contains(out, "noble / ubuntu") {
+		t.Errorf("missing product section, got:\n%s", out)
+	}
+	// INFRA section should appear before PRODUCT section.
+	infraIdx := strings.Index(out, "Infra")
+	productIdx := strings.Index(out, "noble / ubuntu")
+	if infraIdx > productIdx {
+		t.Errorf("infra section should precede product section, got:\n%s", out)
+	}
+}
+
+func TestFormatFailuresSummary_InfraMultipleSignatures(t *testing.T) {
+	records := []domain.FailureRecord{
+		infraRec(1, "noble-base-amd64.tar.gz", "ubuntu-base", "noble",
+			"infra:lp-no-log", "Launchpad build produced no log (builder accepted the job but never attached a log)", 1),
+		infraRec(2, "noble-base-arm64.tar.gz", "ubuntu-base", "noble",
+			"infra:lp-no-log", "Launchpad build produced no log (builder accepted the job but never attached a log)", 1),
+		infraRec(3, "noble-server-amd64.img.xz", "ubuntu-server", "noble",
+			"infra:cdimage-publish-crash", "LP build succeeded but cdimage crashed during publishing", 1),
+	}
+
+	out := FormatFailuresSummary(records, "noble", "")
+
+	if !strings.Contains(out, "infra:lp-no-log") {
+		t.Errorf("missing lp-no-log signature, got:\n%s", out)
+	}
+	if !strings.Contains(out, "infra:cdimage-publish-crash") {
+		t.Errorf("missing cdimage-publish-crash signature, got:\n%s", out)
+	}
+}
+
+func TestFormatFailuresSummary_InfraSingleArtefactInline(t *testing.T) {
+	// A single INFRA record with a signature should be rendered inline,
+	// not as a "N artefacts affected" block.
+	records := []domain.FailureRecord{
+		infraRec(1, "noble-base-amd64.tar.gz", "ubuntu-base", "noble",
+			"infra:lp-no-log", "Launchpad build produced no log (builder accepted the job but never attached a log)", 1),
+	}
+	out := FormatFailuresSummary(records, "noble", "")
+
+	if strings.Contains(out, "artefacts affected") {
+		t.Errorf("single record should not show 'artefacts affected', got:\n%s", out)
+	}
+	if !strings.Contains(out, "noble-base-amd64.tar.gz") {
+		t.Errorf("artefact name should appear inline, got:\n%s", out)
+	}
+}
+
+func TestFormatFailuresSummary_ProductFilterHidesOtherProducts(t *testing.T) {
+	// With a product filter, INFRA records for other products should
+	// not appear in the output.
+	records := []domain.FailureRecord{
+		infraRec(1, "noble-base-amd64.tar.gz", "ubuntu-base", "noble",
+			"infra:lp-no-log", "Launchpad build produced no log (builder accepted the job but never attached a log)", 1),
+		infraRec(2, "noble-server-amd64.iso", "ubuntu-server", "noble",
+			"infra:lp-no-log", "Launchpad build produced no log (builder accepted the job but never attached a log)", 1),
+	}
+
+	// The caller (commands.go) already filters records by product before
+	// calling FormatFailuresSummary, so pass only the matching product's
+	// records here - matching the real call pattern.
+	filtered := []domain.FailureRecord{records[0]}
+	out := FormatFailuresSummary(filtered, "noble", "ubuntu-base")
+
+	if strings.Contains(out, "ubuntu-server") {
+		t.Errorf("ubuntu-server should not appear when filtered to ubuntu-base, got:\n%s", out)
+	}
+	if !strings.Contains(out, "noble-base-amd64.tar.gz") {
+		t.Errorf("ubuntu-base artefact should appear, got:\n%s", out)
+	}
+}
+
+func TestFormatFailuresSummary_MultipleReleases(t *testing.T) {
+	records := []domain.FailureRecord{
+		infraRec(1, "noble-base-amd64.tar.gz", "ubuntu-base", "noble",
+			"infra:lp-no-log", "Launchpad build produced no log (builder accepted the job but never attached a log)", 1),
+		infraRec(2, "stonking-base-amd64.tar.gz", "ubuntu-base", "stonking",
+			"infra:lp-no-log", "Launchpad build produced no log (builder accepted the job but never attached a log)", 1),
+	}
+	out := FormatFailuresSummary(records, "", "")
+
+	if !strings.Contains(out, "Infra · noble") {
+		t.Errorf("missing noble infra section, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Infra · stonking") {
+		t.Errorf("missing stonking infra section, got:\n%s", out)
+	}
+	// Same signature across releases should NOT be merged.
+	if strings.Contains(out, "2 artefacts affected") {
+		t.Errorf("cross-release grouping should not happen, got:\n%s", out)
+	}
+}

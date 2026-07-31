@@ -2,6 +2,7 @@ package application
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -858,7 +859,185 @@ func FormatFailuresSummary(records []domain.FailureRecord, release, product stri
 		}
 	}
 
-	// Group by release → product for display.
+	var sb strings.Builder
+	title := "**Active Failures**"
+	if release != "" && product != "" {
+		title = fmt.Sprintf("**Active Failures · %s / %s**", release, product)
+	} else if release != "" {
+		title = fmt.Sprintf("**Active Failures · %s**", release)
+	}
+	fmt.Fprintf(&sb, "%s · %s\n\n", title, time.Now().UTC().Format("2006-01-02 15:04 UTC"))
+
+	// Split records into INFRA and non-INFRA (PRODUCT/UNKNOWN/unset).
+	var infraRecs, productRecs []domain.FailureRecord
+	for _, r := range records {
+		if r.FailureKind == domain.BuildFailureKindInfra {
+			infraRecs = append(infraRecs, r)
+		} else {
+			productRecs = append(productRecs, r)
+		}
+	}
+
+	// --- INFRA section ---
+	// Group by release, then by signature, collapsing artefacts
+	// across products into a single block per root cause.
+	if len(infraRecs) > 0 {
+		sb.WriteString(formatInfraFailures(infraRecs))
+	}
+
+	// --- PRODUCT / UNKNOWN section ---
+	// Existing per-(release, product) grouping with per-product
+	// GroupBySignature sub-grouping.
+	if len(productRecs) > 0 {
+		sb.WriteString(formatProductFailures(productRecs))
+	}
+
+	return sb.String()
+}
+
+// formatInfraFailures renders INFRA records grouped by (release, signature)
+// across all products, so a single infrastructure outage that hits many
+// artefacts appears as one collapsed block rather than per-product lines.
+func formatInfraFailures(records []domain.FailureRecord) string {
+	// Collect distinct releases in sorted order.
+	releaseSet := make(map[string]struct{})
+	for _, r := range records {
+		releaseSet[r.Release] = struct{}{}
+	}
+	releases := make([]string, 0, len(releaseSet))
+	for rel := range releaseSet {
+		releases = append(releases, rel)
+	}
+	sort.Strings(releases)
+
+	var sb strings.Builder
+	for _, rel := range releases {
+		// Collect all INFRA records for this release.
+		var relRecs []domain.FailureRecord
+		for _, r := range records {
+			if r.Release == rel {
+				relRecs = append(relRecs, r)
+			}
+		}
+
+		// Group by signature; unsig'd records go under "".
+		bySig := domain.GroupBySignature(relRecs)
+		sigs := make([]string, 0, len(bySig))
+		for sig := range bySig {
+			sigs = append(sigs, sig)
+		}
+		sort.Strings(sigs)
+
+		fmt.Fprintf(&sb, "**Infra · %s** — %d failing\n", rel, len(relRecs))
+		for _, sig := range sigs {
+			group := bySig[sig]
+			if sig == "" {
+				// No signature - render individually.
+				for _, r := range group {
+					sb.WriteString(formatFailureRecord(r))
+				}
+				continue
+			}
+			if len(group) == 1 {
+				r := group[0]
+				occStr := ""
+				if r.Occurrences > 1 {
+					occStr = fmt.Sprintf(" (%d× recurring)", r.Occurrences)
+				}
+				fmt.Fprintf(&sb, " - **%s**%s — `%s`\n",
+					r.ArtefactName, occStr, sig)
+				continue
+			}
+			// Multiple artefacts - group by product for compactness.
+			fmt.Fprintf(&sb, " - `%s` — %d artefacts affected\n",
+				sig, len(group))
+			sb.WriteString(formatInfraArtefactsByProduct(group))
+			// Emit the human-readable description once, from the first
+			// record (all records in the group share the same description).
+			if group[0].FailureDescription != "" {
+				fmt.Fprintf(&sb, "   _%s_\n",
+					group[0].FailureDescription)
+			}
+		}
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
+// formatInfraArtefactsByProduct compacts a group of INFRA records that share
+// a signature into per-product lines of the form:
+//
+//   - ubuntu-server (amd64, arm64, s390x)
+func formatInfraArtefactsByProduct(
+	group []domain.FailureRecord,
+) string {
+	// Collect products in order.
+	productOrder := []string{}
+	byProduct := make(map[string][]domain.FailureRecord)
+	for _, r := range group {
+		if _, seen := byProduct[r.Product]; !seen {
+			productOrder = append(productOrder, r.Product)
+		}
+		byProduct[r.Product] = append(byProduct[r.Product], r)
+	}
+	sort.Strings(productOrder)
+
+	var sb strings.Builder
+	for _, prod := range productOrder {
+		recs := byProduct[prod]
+		// Extract arch suffix from artefact name for brevity.
+		// Names are like "stonking-base-amd64.tar.gz" - arch is
+		// the component before the first ".".
+		archs := make([]string, 0, len(recs))
+		for _, r := range recs {
+			archs = append(archs, archVariantFromName(r.ArtefactName))
+		}
+		sort.Strings(archs)
+		occMax := 0
+		for _, r := range recs {
+			if r.Occurrences > occMax {
+				occMax = r.Occurrences
+			}
+		}
+		occStr := ""
+		if occMax > 1 {
+			occStr = fmt.Sprintf(" (%d× recurring)", occMax)
+		}
+		fmt.Fprintf(&sb, "   - %s (%s)%s\n",
+			prod, strings.Join(archs, ", "), occStr)
+	}
+	return sb.String()
+}
+
+// archVariantFromName extracts the full arch+variant token from an artefact
+// filename, preserving sub-variants like "arm64+largemem".
+// e.g. "stonking-base-amd64.tar.gz"        -> "amd64"
+//
+//	"noble-live-server-arm64+largemem.iso" -> "arm64+largemem"
+//
+// Falls back to the full name if the pattern is not recognised.
+func archVariantFromName(name string) string {
+	// Strip any extension clusters (.tar.gz, .img.xz, .iso, …).
+	base := name
+	for {
+		ext := filepath.Ext(base)
+		if ext == "" {
+			break
+		}
+		base = base[:len(base)-len(ext)]
+	}
+	// The last dash-separated token is the arch (may include +variant).
+	parts := strings.Split(base, "-")
+	if len(parts) > 1 {
+		return parts[len(parts)-1]
+	}
+	return name
+}
+
+// formatProductFailures renders PRODUCT/UNKNOWN/unset records using the
+// original per-(release, product) grouping with GroupBySignature within
+// each bucket.
+func formatProductFailures(records []domain.FailureRecord) string {
 	type key struct{ release, product string }
 	order := []key{}
 	byKey := make(map[key][]domain.FailureRecord)
@@ -877,22 +1056,12 @@ func FormatFailuresSummary(records []domain.FailureRecord, release, product stri
 	})
 
 	var sb strings.Builder
-	title := "**Active Failures**"
-	if release != "" && product != "" {
-		title = fmt.Sprintf("**Active Failures · %s / %s**", release, product)
-	} else if release != "" {
-		title = fmt.Sprintf("**Active Failures · %s**", release)
-	}
-	fmt.Fprintf(&sb, "%s · %s\n\n", title, time.Now().UTC().Format("2006-01-02 15:04 UTC"))
-
 	for _, k := range order {
 		recs := byKey[k]
-		fmt.Fprintf(&sb, "**%s / %s** — %d failing\n", k.release, k.product, len(recs))
+		fmt.Fprintf(&sb, "**%s / %s** — %d failing\n",
+			k.release, k.product, len(recs))
 
-		// Separate records with a signature from those without.
 		bySig := domain.GroupBySignature(recs)
-
-		// Collect and sort signatures for deterministic output.
 		sigs := make([]string, 0, len(bySig))
 		for sig := range bySig {
 			sigs = append(sigs, sig)
@@ -902,15 +1071,12 @@ func FormatFailuresSummary(records []domain.FailureRecord, release, product stri
 		for _, sig := range sigs {
 			group := bySig[sig]
 			if sig == "" {
-				// No signature — render per-record as before.
 				for _, r := range group {
 					sb.WriteString(formatFailureRecord(r))
 				}
 				continue
 			}
-			// Shared signature — render as a grouped block.
 			if len(group) == 1 {
-				// Only one artefact with this signature; inline it.
 				r := group[0]
 				occStr := ""
 				if r.Occurrences > 1 {
@@ -935,7 +1101,8 @@ func FormatFailuresSummary(records []domain.FailureRecord, release, product stri
 					}
 				}
 			}
-			fmt.Fprintf(&sb, " - `%s` — %d artefacts affected\n", sig, len(group))
+			fmt.Fprintf(&sb, " - `%s` — %d artefacts affected\n",
+				sig, len(group))
 			for _, r := range group {
 				occStr := ""
 				if r.Occurrences > 1 {
